@@ -8,7 +8,7 @@ def test_python_symbols(tmp_path):
     out = build_map(tmp_path)
     assert "a.py" in out
     assert "foo" in out and "Bar" in out
-    assert "lines)" in out  # line count shown
+    assert "(7 lines)" in out  # line count shown
 
 
 def test_skips_noise_dirs_and_binaries(tmp_path):
@@ -24,6 +24,7 @@ def test_non_python_shows_first_line(tmp_path):
     (tmp_path / "README.md").write_text("# My Project\n\nstuff")
     out = build_map(tmp_path)
     assert "README.md" in out
+    assert "My Project" in out
 
 
 def test_limit_caps_output(tmp_path):

@@ -246,6 +246,8 @@ class Planner:
             "task": _task_payload(task),
             "project_map": build_map(session.project_dir),
         }
+        if task.last_feedback:
+            payload["feedback_on_previous_attempt"] = task.last_feedback
         messages = self._messages(session, "planner_execute.txt", payload)
         report = self._request_with_tools(
             session, "execute", messages, toolbox, allow_write=True, task_id=task.id, json_mode=False,

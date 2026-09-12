@@ -59,14 +59,23 @@ class FakePlanner:
         self.review_calls = []
         self.executor_choice = ("claude", "")
         self.execute_impl = None
+        self.choose_calls = 0
+        self.raise_if_choose_called = False
+        self.executed_feedback = []  # task.last_feedback seen on each execute_task call
 
     def choose_executor(self, session, task, toolbox):
+        if self.raise_if_choose_called:
+            raise AssertionError("choose_executor should not have been called")
+        self.choose_calls += 1
         return self.executor_choice
 
     def execute_task(self, session, task, toolbox):
         # self.execute_impl(root, prompt) writes files and returns a report string
         import pathlib
-        return self.execute_impl(pathlib.Path(session.project_dir), task.description) if self.execute_impl else "done"
+        self.executed_feedback.append(task.last_feedback)
+        if self.execute_impl is None:
+            return "done"
+        return self.execute_impl(pathlib.Path(session.project_dir), task.description)
 
     def plan(self, session, listing, clarifications):
         self.plan_calls.append(clarifications)
@@ -664,10 +673,21 @@ def test_dependency_folders_and_secrets_are_never_committed_or_deleted(settings,
 # ---- planner as executor ------------------------------------------------------
 
 
+def planner_writes(files: dict[str, str], report="did it"):
+    """A FakePlanner.execute_impl that writes files and returns a real report string."""
+    def impl(root: Path, prompt: str) -> str:
+        for name, content in files.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        return report
+    return impl
+
+
 def test_planner_executes_task_itself(settings, db, project):
     planner = FakePlanner(PlanResponse(tasks=[spec(0, "docs")]), [ok()])
     planner.executor_choice = ("planner", "just docs")
-    planner.execute_impl = lambda root, prompt: (root / "README.md").write_text("# Docs\n") or "wrote README"
+    planner.execute_impl = planner_writes({"README.md": "# Docs\n"}, report="wrote README")
     executor = FakeExecutor([])  # Claude must NOT be called
     session = build(settings, db, planner, executor).start(project, "x")
     assert session.status == "done"
@@ -675,16 +695,16 @@ def test_planner_executes_task_itself(settings, db, project):
     assert not executor.calls
     execs = db.list_executions(session_id=session.id)
     assert execs[0].agent == "planner"
+    assert execs[0].result.result_text == "wrote README"
     assert db.list_tasks(session.id)[0].executor == "planner"
 
 
 def test_planner_work_passes_through_checks(settings, db, project):
-    # planner executor, first attempt writes nothing (check fails) -> retry; then claude fixes?
-    # Keep it simple: planner writes the flag on its first try and the check passes.
+    # planner executor writes the flag on its first try and the check passes.
     planner = FakePlanner(PlanResponse(tasks=[spec(0, "docs", ["test -f README.md"])]), [ok()])
     planner.executor_choice = ("planner", "docs")
-    planner.execute_impl = lambda root, prompt: (root / "README.md").write_text("# Docs\n") or "wrote"
-    session = build(settings, db, FakePlanner and planner, FakeExecutor([])).start(project, "x")
+    planner.execute_impl = planner_writes({"README.md": "# Docs\n"}, report="wrote")
+    session = build(settings, db, planner, FakeExecutor([])).start(project, "x")
     assert session.status == "done"
     assert db.list_executions(session_id=session.id)[0].verify_results[0].passed
 
@@ -705,6 +725,31 @@ def test_planner_failing_check_is_caught(settings, db, project):
     assert calls["n"] == 2  # first attempt failed the check, retried
 
 
+def test_planner_retry_starts_clean_and_gets_feedback(settings, db, project):
+    # First attempt writes a WRONG file (check fails) -> retry starts from a clean
+    # checkpoint (the wrong file is gone) and receives the reviewer's feedback.
+    planner = FakePlanner(PlanResponse(tasks=[spec(0, "docs", ["test -f README.md"])]),
+                          [verdict("retry", "no README", feedback="write README.md"), ok()])
+    planner.executor_choice = ("planner", "docs")
+    calls = {"n": 0}
+    def impl(root, prompt):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            (root / "WRONG.md").write_text("oops\n")  # wrong file, check fails
+        else:
+            assert not (root / "WRONG.md").exists()  # started from a clean tree
+            (root / "README.md").write_text("# Docs\n")
+        return "attempt"
+    planner.execute_impl = impl
+    session = build(settings, db, planner, FakeExecutor([])).start(project, "x")
+    assert session.status == "done"
+    assert calls["n"] == 2
+    assert not (project / "WRONG.md").exists()
+    # The reviewer's feedback reached execute_task on the second attempt.
+    assert planner.executed_feedback[0] is None
+    assert planner.executed_feedback[1] == "write README.md"
+
+
 def test_claude_still_used_when_chosen(settings, db, project):
     planner = FakePlanner(PlanResponse(tasks=[spec(0, "code")]), [ok()])
     planner.executor_choice = ("claude", "real code")
@@ -712,6 +757,43 @@ def test_claude_still_used_when_chosen(settings, db, project):
     session = build(settings, db, planner, executor).start(project, "x")
     assert session.status == "done" and executor.calls
     assert db.list_executions(session_id=session.id)[0].agent == "claude"
+
+
+def test_allow_planner_executor_false_forces_claude(settings, db, project):
+    settings.allow_planner_executor = False
+    planner = FakePlanner(PlanResponse(tasks=[spec(0, "docs")]), [ok()])
+    planner.executor_choice = ("planner", "would pick planner")  # but must be ignored
+    planner.raise_if_choose_called = True  # choose_executor must NOT be consulted
+    executor = FakeExecutor([writes({"app.py": "1"})])
+    session = build(settings, db, planner, executor).start(project, "x")
+    assert session.status == "done"
+    assert executor.calls  # Claude was used
+    assert planner.choose_calls == 0
+    assert db.list_executions(session_id=session.id)[0].agent == "claude"
+
+
+def test_forced_claude_retry_does_not_reconsult_choose_executor(settings, db, project):
+    # A verify-fail -> retry cycle on a Claude task must stay on Claude without asking again.
+    check = "test -f done.flag"
+    planner = FakePlanner(PlanResponse(tasks=[spec(0, "flag", [check])]), [ok("says done"), ok()])
+    planner.executor_choice = ("claude", "real code")
+    executor = FakeExecutor([writes({"partial.txt": "x"}, session_id="claude-7"), writes({"done.flag": "1"})])
+    orchestrator = build(settings, db, planner, executor)
+
+    original_choose = planner.choose_executor
+
+    def counting_choose(session, task, toolbox):
+        # After the first attempt this becomes a forced-Claude retry; guard against a second call.
+        if planner.choose_calls >= 1:
+            planner.raise_if_choose_called = True
+        return original_choose(session, task, toolbox)
+
+    planner.choose_executor = counting_choose
+    session = orchestrator.start(project, "x")
+    assert session.status == "done"
+    # The retry resumed Claude and did not consult choose_executor a second time.
+    assert executor.calls[1]["resume"] == "claude-7"
+    assert planner.choose_calls == 1
 
 
 def test_find_task_number_not_shadowed_by_uuid_prefix(db, tmp_path):

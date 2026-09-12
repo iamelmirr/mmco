@@ -367,6 +367,10 @@ class Orchestrator:
                 "▶ task {}/{} '{}' (attempt {}, executor: DeepSeek)",
                 position, len(tasks), task.label, task.attempts + 1,
             )
+            # A planner retry has no conversation to resume, so start from the checkpoint
+            # instead of compounding the previous attempt's rolled-back-but-still-on-disk edits.
+            if task.last_feedback and not forced_claude:
+                workspace.reset_to(task.start_commit)
             report = self.planner.execute_task(session, task, Toolbox(session.project_dir, allow_write=True))
             result = ExecutionResult(
                 prompt=self._task_block(task), result_text=str(report), cost_usd=None, claude_session_id=None

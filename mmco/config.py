@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     planner_temperature: float = 0.2
     planner_json_mode: bool = True
     planner_max_retries: int = 3
+    planner_max_tool_calls: int = 25
     planner_timeout_seconds: int = 180
 
     claude_binary: str = "claude"

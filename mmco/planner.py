@@ -25,6 +25,7 @@ from .models import (
     VerifyResult,
 )
 from .rules import load_rules, prompt_dirs
+from .tools import Toolbox
 from .utils import MMCOError, extract_json, load_prompt, truncate
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
@@ -74,7 +75,14 @@ class Planner:
 
     # ---- public API -----------------------------------------------------
 
-    def plan(self, session: Session, project_files: str, clarifications: list[Clarification]) -> PlanResponse:
+    def plan(
+        self,
+        session: Session,
+        project_files: str,
+        clarifications: list[Clarification],
+        read_tools: bool = False,
+        toolbox: "Toolbox | None" = None,
+    ) -> PlanResponse:
         payload = {
             "request": session.original_request,
             "project_files": project_files or "(empty directory)",
@@ -82,6 +90,11 @@ class Planner:
             "executor_context": self.executor_context(session),
             "user_clarifications": _qa(clarifications),
         }
+        if read_tools:
+            tb = toolbox or Toolbox(session.project_dir, allow_write=False)
+            return self._call_json_with_tools(
+                session, "plan", "planner_plan.txt", payload, PlanResponse, tb, allow_write=False
+            )
         return self._call_json(session, "plan", "planner_plan.txt", payload, PlanResponse)
 
     def evaluate(
@@ -91,6 +104,8 @@ class Planner:
         execution: Execution,
         history: list[dict[str, Any]],
         clarifications: list[Clarification],
+        read_tools: bool = False,
+        toolbox: "Toolbox | None" = None,
     ) -> EvalResult:
         s = self.settings
         r = execution.result
@@ -140,6 +155,11 @@ class Planner:
             ],
             "user_clarifications": _qa(clarifications),
         }
+        if read_tools:
+            tb = toolbox or Toolbox(session.project_dir, allow_write=False)
+            return self._call_json_with_tools(
+                session, "eval", "planner_eval.txt", payload, EvalResult, tb, allow_write=False, task_id=task.id
+            )
         return self._call_json(session, "eval", "planner_eval.txt", payload, EvalResult, task_id=task.id)
 
     def review(
@@ -227,9 +247,44 @@ class Planner:
         """Ask for JSON; on parse/validation failure, show the model its error and ask again."""
         session_id = session.id
         messages = self._messages(session, prompt_file, payload)
+        return self._parse_json_with_retries(
+            purpose,
+            messages,
+            schema,
+            lambda msgs: self._request(session_id, purpose, msgs, json_mode=True, task_id=task_id),
+        )
+
+    def _call_json_with_tools(
+        self,
+        session: Session,
+        purpose: PlannerPurpose,
+        prompt_file: str,
+        payload: dict[str, Any],
+        schema: type[SchemaT],
+        toolbox: Toolbox,
+        allow_write: bool,
+        task_id: str | None = None,
+    ) -> SchemaT:
+        """Like ``_call_json`` but the model may call tools before answering with JSON."""
+        messages = self._messages(session, prompt_file, payload)
+        return self._parse_json_with_retries(
+            purpose,
+            messages,
+            schema,
+            lambda msgs: self._request_with_tools(session, purpose, msgs, toolbox, allow_write, task_id=task_id),
+        )
+
+    def _parse_json_with_retries(
+        self,
+        purpose: PlannerPurpose,
+        messages: list[dict[str, Any]],
+        schema: type[SchemaT],
+        produce,
+    ) -> SchemaT:
+        """Shared retry/parse loop: ``produce(messages)`` yields the model's text answer."""
         last_error: Exception | None = None
         for attempt in range(1, self.settings.planner_max_retries + 1):
-            content = self._request(session_id, purpose, messages, json_mode=True, task_id=task_id)
+            content = produce(messages)
             try:
                 return schema.model_validate(extract_json(content))
             except (ValueError, ValidationError) as exc:
@@ -248,6 +303,100 @@ class Planner:
             f"planner returned invalid JSON for '{purpose}' after {self.settings.planner_max_retries} attempts: "
             f"{truncate(str(last_error), 500)}"
         )
+
+    def _request_with_tools(
+        self,
+        session: Session,
+        purpose: PlannerPurpose,
+        messages: list[dict[str, Any]],
+        toolbox: Toolbox,
+        allow_write: bool,
+        task_id: str | None = None,
+        json_mode: bool = True,
+    ) -> str:
+        """Run a tool-calling loop, then return the model's final text answer.
+
+        Each iteration sends the conversation with the toolbox schemas attached. Tool calls are
+        dispatched and their results fed back. When the model stops calling tools we return its
+        answer; when the budget is exhausted we ask once more, without tools, for the answer.
+        """
+        s = self.settings
+        messages = list(messages)
+        for _ in range(s.planner_max_tool_calls):
+            kwargs: dict[str, Any] = {
+                "model": s.planner_model,
+                "messages": messages,
+                "temperature": s.planner_temperature,
+                "tools": toolbox.schemas(allow_write),
+                "tool_choice": "auto",
+            }
+            message = self._create_and_persist(session.id, purpose, kwargs, task_id)
+            tool_calls = getattr(message, "tool_calls", None)
+            if not tool_calls:
+                return message.content or ""
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": message.content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                        }
+                        for tc in tool_calls
+                    ],
+                }
+            )
+            for tc in tool_calls:
+                try:
+                    args = json.loads(tc.function.arguments or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                result = toolbox.dispatch(tc.function.name, args)
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+
+        # Budget exhausted: force a final answer without any further tool calls.
+        messages.append(
+            {
+                "role": "user",
+                "content": "Tool budget exhausted. Answer now with the required JSON, no more tool calls.",
+            }
+        )
+        kwargs = {"model": s.planner_model, "messages": messages, "temperature": s.planner_temperature}
+        if json_mode and s.planner_json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        message = self._create_and_persist(session.id, purpose, kwargs, task_id)
+        return message.content or ""
+
+    def _create_and_persist(
+        self, session_id: str, purpose: PlannerPurpose, kwargs: dict[str, Any], task_id: str | None
+    ) -> Any:
+        """One completion (single attempt), persisted like ``_request``; fatal failures raise PlannerError."""
+        s = self.settings
+        started = time.monotonic()
+        try:
+            response = self.client.chat.completions.create(**kwargs)
+            message = response.choices[0].message
+        except Exception as exc:  # noqa: BLE001 - logged, then surfaced as PlannerError
+            elapsed = int((time.monotonic() - started) * 1000)
+            self.db.add_planner_call(
+                session_id, purpose, s.planner_model, kwargs, None, elapsed, task_id, error=repr(exc)
+            )
+            hint = ""
+            if isinstance(exc, openai.BadRequestError) and "response_format" in kwargs:
+                hint = " (if the model does not support JSON mode, set MMCO_PLANNER_JSON_MODE=false)"
+            raise PlannerError(f"planner API call failed: {exc}{hint}") from exc
+        elapsed = int((time.monotonic() - started) * 1000)
+        content = message.content or ""
+        cost = _usage_cost(response)
+        self.db.add_planner_call(
+            session_id, purpose, s.planner_model, kwargs, content, elapsed, task_id, cost_usd=cost
+        )
+        logger.bind(event="planner_call", purpose=purpose, request=kwargs["messages"], response=content).debug(
+            "planner {} call finished in {:.1f}s", purpose, elapsed / 1000
+        )
+        return message
 
     def _request(
         self,

@@ -771,7 +771,7 @@ function taskDetail(t) {
   const evaluations = Object.fromEntries(detail.evaluations.map((e) => [e.execution_id, e]));
   const task = detail.tasks.find((x) => x.id === t.id);
   if (executions.length < t.attempts || (t.status === "in_progress" && detail._stamp !== stamp())) loadDetail();
-  const parts = [`<div class="attempt"><h4>Task given to Claude</h4><pre class="block">${esc(task?.description || t.description)}</pre>
+  const parts = [`<div class="attempt"><h4>The task</h4><pre class="block">${esc(task?.description || t.description)}</pre>
     ${task?.prompt_override ? `<details class="more"><summary>Rewritten prompt after a failed attempt</summary><pre class="block">${esc(task.prompt_override)}</pre></details>` : ""}</div>`];
   for (const ex of executions) {
     const ev = evaluations[ex.id];

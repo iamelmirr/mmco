@@ -365,16 +365,25 @@ class Orchestrator:
                 session, task, Toolbox(session.project_dir, allow_write=False)
             )
             logger.info("executor for '{}': {} ({})", task.label, executor, reason or "no reason given")
-        return self._execute_as(session, task, tasks, workspace, executor)
+        # A planner task being retried with feedback restarts from the checkpoint (see _execute_as).
+        return self._execute_as(
+            session, task, tasks, workspace, executor,
+            reset_for_planner_retry=(executor == "planner" and bool(task.last_feedback)),
+        )
 
     def _execute_as(
-        self, session: Session, task: Task, tasks: list[Task], workspace: Workspace, executor: str
+        self, session: Session, task: Task, tasks: list[Task], workspace: Workspace, executor: str,
+        reset_for_planner_retry: bool = False,
     ) -> Execution:
-        """Run this task with a specific executor and put the result through the shared verify/regression tail."""
+        """Run this task with a specific executor and put the result through the shared verify/regression tail.
+
+        reset_for_planner_retry rolls the tree back to the checkpoint before the planner runs. It is meant
+        ONLY for a planner *retry* (which has no conversation to resume, so it must not compound the previous
+        attempt's rolled-back-but-still-on-disk edits). A take_over passes False so the planner BUILDS ON the
+        coding agent's work instead of discarding the very changes it is supposed to finish.
+        """
         s = self.settings
         position = next((i for i, t in enumerate(tasks, 1) if t.id == task.id), "?")
-        # A Claude retry (--resume with feedback) must stay on disk; a planner take_over builds on it too.
-        forced_claude = bool(task.resume_claude_session_id and task.last_feedback)
         task.executor = executor
         self.db.save_task(task)
 
@@ -383,9 +392,7 @@ class Orchestrator:
                 "▶ task {}/{} '{}' (attempt {}, executor: DeepSeek)",
                 position, len(tasks), task.label, task.attempts + 1,
             )
-            # A planner retry has no conversation to resume, so start from the checkpoint
-            # instead of compounding the previous attempt's rolled-back-but-still-on-disk edits.
-            if task.last_feedback and not forced_claude:
+            if reset_for_planner_retry:
                 workspace.reset_to(task.start_commit)
             report = self.planner.execute_task(session, task, Toolbox(session.project_dir, allow_write=True))
             result = ExecutionResult(
@@ -571,9 +578,12 @@ class Orchestrator:
         logger.success("✔ task '{}' done", task.label)
 
     def _take_over(self, session: Session, task: Task, workspace: Workspace) -> None:
-        """The planner finishes the task itself, building on the coding agent's work.
+        """The planner finishes the task itself, building on the coding agent's on-disk work.
 
-        A per-task hand-off counter stops the two executors from ping-ponging forever.
+        A per-task hand-off counter stops the two executors from ping-ponging forever: this method →
+        _execute_as → _evaluate_and_dispatch → _dispatch may recurse back here on another take_over, but
+        the mutual recursion is bounded by max_handoffs_per_task. handoffs is a conservative lifetime cap
+        and is intentionally NOT reset on reformulation.
         """
         task.handoffs += 1
         self.db.save_task(task)
@@ -582,7 +592,8 @@ class Orchestrator:
             return
         logger.info("planner is taking over '{}' to finish it (hand-off {})", task.label, task.handoffs)
         tasks = self.db.list_tasks(session.id)
-        execution = self._execute_as(session, task, tasks, workspace, "planner")
+        # Build on whatever the coding agent left on disk; never reset before a take_over.
+        execution = self._execute_as(session, task, tasks, workspace, "planner", reset_for_planner_retry=False)
         self._evaluate_and_dispatch(session, task, execution, workspace)
 
     def _retry(

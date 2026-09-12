@@ -813,6 +813,40 @@ def test_take_over_finishes_a_claude_task(settings, db, project):
     assert db.list_tasks(session.id)[0].handoffs == 1
 
 
+def test_take_over_builds_on_claude_work_without_resetting(settings, db, project):
+    # Claude errors -> retry (fresh attempt, resume is None but feedback is set) -> Claude writes a
+    # partial file -> evaluator returns take_over. The planner must BUILD ON that file, not reset the
+    # tree back to the checkpoint (which would delete the very work take_over is meant to finish).
+    def errors(text="something broke"):
+        def step(root, prompt):
+            return ExecutionResult(prompt=prompt, result_text=text, is_error=True, exit_code=1,
+                                   claude_session_id="claude-err", duration_ms=100)
+        return step
+
+    planner = FakePlanner(PlanResponse(tasks=[spec(0, "feature", ["test -f final.txt"])]),
+                          [verdict("retry", "fix it", feedback="fix it"),
+                           verdict("take_over", "claude got most of it"), ok()])
+    planner.executor_choice = ("claude", "")
+
+    def planner_impl(root, prompt):
+        # Relies on Claude's file; if the tree had been reset this read would raise and fail the test.
+        content = (root / "claude.txt").read_text()
+        (root / "final.txt").write_text(content + " finished")
+        return "finished it"
+    planner.execute_impl = planner_impl
+    executor = FakeExecutor([errors(), writes({"claude.txt": "hello"})])
+    session = build(settings, db, planner, executor).start(project, "x")
+
+    assert session.status == "done"
+    assert (project / "claude.txt").exists()  # NOT reset before the take_over
+    assert (project / "final.txt").read_text() == "hello finished"
+    agents = [e.agent for e in db.list_executions(session_id=session.id)]
+    assert agents == ["claude", "claude", "planner"]
+    # The fresh Claude attempt after the error started a new conversation (no resume) but got the feedback.
+    assert executor.calls[1]["resume"] is None
+    assert "fix it" in executor.calls[1]["prompt"]
+
+
 def test_handoff_counter_escalates(settings, db, project):
     settings.max_handoffs_per_task = 2
     settings.escalate_to_user = False  # so exhaustion fails instead of asking

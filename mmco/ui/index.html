@@ -1,0 +1,1152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mmco</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --paper: #eceff3;
+  --panel: #ffffff;
+  --sunken: #f5f7fa;
+  --ink: #17202b;
+  --ink-2: #4a5563;
+  --ink-3: #7b8594;
+  --line: #d6dce4;
+  --line-strong: #bcc5d1;
+  --planner: #3a56d4;
+  --planner-soft: #e3e8fb;
+  --claude: #8a4fb0;
+  --claude-soft: #f0e7f6;
+  --ok: #2c8757;
+  --ok-soft: #e1f1e8;
+  --warn: #a86d12;
+  --warn-soft: #fbf0da;
+  --bad: #c0392f;
+  --bad-soft: #f8e2e0;
+  --focus: #3a56d4;
+  --sans: "Hanken Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #161c25;
+    --panel: #1d2531;
+    --sunken: #19202a;
+    --ink: #e5e9ef;
+    --ink-2: #b1bac6;
+    --ink-3: #8390a0;
+    --line: #2d3746;
+    --line-strong: #3d4959;
+    --planner: #7c93f2;
+    --planner-soft: #26304f;
+    --claude: #c392e0;
+    --claude-soft: #362a44;
+    --ok: #5cc28b;
+    --ok-soft: #1f3a2c;
+    --warn: #e0a54a;
+    --warn-soft: #3b3020;
+    --bad: #ef7b72;
+    --bad-soft: #432826;
+    --focus: #7c93f2;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { font: 14px/1.5 var(--sans); color: var(--ink); background: var(--paper); -webkit-font-smoothing: antialiased; }
+button, input, textarea, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+a { color: var(--planner); }
+code, .mono { font-family: var(--mono); font-size: 12.5px; }
+[hidden] { display: none !important; }
+
+/* ---------- shell ---------- */
+.app { display: grid; grid-template-columns: 252px minmax(0, 1fr); min-height: 100vh; }
+.sidebar { border-right: 1px solid var(--line); padding: 20px 14px; display: flex; flex-direction: column; gap: 18px;
+  position: sticky; top: 0; height: 100vh; overflow-y: auto; background: var(--paper); }
+.brand { display: flex; align-items: center; gap: 10px; padding: 0 8px; }
+.brand-mark { width: 30px; height: 30px; position: relative; flex: none; }
+.brand-mark span { position: absolute; width: 18px; height: 18px; border-radius: 50%; top: 6px; }
+.brand-mark span:first-child { left: 0; background: var(--planner); }
+.brand-mark span:last-child { right: 0; background: var(--claude); mix-blend-mode: multiply; }
+@media (prefers-color-scheme: dark) { .brand-mark span:last-child { mix-blend-mode: screen; } }
+.brand-name { font-weight: 700; font-size: 19px; letter-spacing: -0.02em; }
+.brand-sub { color: var(--ink-3); font-size: 12px; line-height: 1.3; }
+.nav-heading { color: var(--ink-3); font-size: 12.5px; font-weight: 600; padding: 0 8px; margin: 0 0 6px; }
+.nav-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.nav-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; border: 0; background: none;
+  border-radius: 7px; cursor: pointer; text-align: left; color: var(--ink-2); }
+.nav-item:hover { background: var(--panel); color: var(--ink); }
+.nav-item[aria-current="page"] { background: var(--panel); color: var(--ink); font-weight: 600; box-shadow: inset 0 0 0 1px var(--line); }
+.nav-item .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); flex: none; }
+.dot.done { background: var(--ok); }
+.dot.failed { background: var(--bad); }
+.dot.waiting { background: var(--warn); }
+.dot.running { background: var(--claude); box-shadow: 0 0 0 3px var(--claude-soft); }
+.sidebar-foot { margin-top: auto; display: flex; flex-direction: column; gap: 2px; }
+.nav-icon { width: 16px; text-align: center; color: var(--ink-3); flex: none; }
+
+.main { padding: 28px 40px 80px; min-width: 0; }
+.page { max-width: 1060px; }
+.page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; flex-wrap: wrap; margin-bottom: 18px; }
+.page-title { font-size: 26px; line-height: 1.15; font-weight: 700; letter-spacing: -0.02em; margin: 0; }
+.page-path { color: var(--ink-3); margin: 4px 0 0; word-break: break-all; font-size: 13px; }
+.head-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 24px; }
+.tab { border: 0; background: none; padding: 9px 12px; cursor: pointer; color: var(--ink-2); border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 500; }
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+
+/* ---------- controls ---------- */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 13px; border-radius: 7px;
+  border: 1px solid var(--line-strong); background: var(--panel); cursor: pointer; font-weight: 500; white-space: nowrap; }
+.btn:hover { border-color: var(--ink-3); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.primary { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.btn.primary:hover { background: var(--ink-2); }
+.btn.planner { background: var(--planner); color: #fff; border-color: var(--planner); }
+.btn.danger { color: var(--bad); }
+.btn.quiet { border-color: transparent; background: none; color: var(--ink-2); }
+.btn.quiet:hover { background: var(--sunken); color: var(--ink); }
+.btn.small { padding: 4px 9px; font-size: 13px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.label { font-weight: 600; font-size: 13.5px; }
+.help { color: var(--ink-3); font-size: 12.5px; }
+.input, .textarea, .select { width: 100%; border: 1px solid var(--line-strong); background: var(--panel); border-radius: 7px; padding: 8px 10px; }
+.textarea { resize: vertical; min-height: 84px; line-height: 1.5; }
+.textarea.code { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; tab-size: 2; }
+.input:focus, .textarea:focus, .select:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--planner-soft); }
+.check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; color: var(--ink-2); }
+.check input { width: 16px; height: 16px; accent-color: var(--ink); }
+
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
+  background: var(--sunken); color: var(--ink-2); white-space: nowrap; }
+.pill.done { background: var(--ok-soft); color: var(--ok); }
+.pill.failed, .pill.blocked { background: var(--bad-soft); color: var(--bad); }
+.pill.waiting { background: var(--warn-soft); color: var(--warn); }
+.pill.running { background: var(--claude-soft); color: var(--claude); }
+.pill.planner { background: var(--planner-soft); color: var(--planner); }
+
+.section { margin-bottom: 34px; }
+.section-title { font-size: 17px; font-weight: 650; margin: 0 0 4px; letter-spacing: -0.01em; }
+.section-lede { color: var(--ink-2); margin: 0 0 14px; max-width: 70ch; }
+.surface { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.pad { padding: 18px 20px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.spacer { flex: 1; }
+.muted { color: var(--ink-3); }
+.empty { padding: 44px 24px; text-align: center; color: var(--ink-2); }
+.empty h2 { color: var(--ink); font-size: 20px; margin: 0 0 6px; }
+
+/* ---------- composer ---------- */
+.composer { padding: 16px; }
+.composer .textarea { border: 0; box-shadow: none; padding: 4px 2px; min-height: 72px; font-size: 15.5px; resize: none; background: transparent; }
+.composer .textarea:focus { box-shadow: none; }
+.composer-foot { display: flex; align-items: center; gap: 14px; border-top: 1px solid var(--line); padding-top: 12px; margin-top: 8px; flex-wrap: wrap; }
+
+/* ---------- relay board (the signature element) ---------- */
+.run-head { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; padding: 18px 20px; border-bottom: 1px solid var(--line); }
+.run-request { font-size: 17px; font-weight: 600; line-height: 1.35; margin: 0 0 8px; max-width: 72ch; }
+.run-stats { display: flex; gap: 18px; color: var(--ink-2); font-size: 13px; flex-wrap: wrap; }
+.run-stats b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.agents { display: flex; gap: 18px; padding: 10px 20px; border-bottom: 1px solid var(--line); background: var(--sunken); font-size: 12.5px; color: var(--ink-2); flex-wrap: wrap; }
+.agent { display: inline-flex; align-items: center; gap: 7px; }
+.swatch { width: 18px; height: 6px; border-radius: 3px; }
+.swatch.planner { background: var(--planner); }
+.swatch.claude { background: var(--claude); }
+.swatch.probe { background: var(--ink-3); }
+
+.relay { list-style: none; margin: 0; padding: 8px 0; }
+.stage-row { position: relative; display: grid; grid-template-columns: 44px minmax(0, 1fr); padding: 0 20px 0 12px; }
+.stage-row::before { content: ""; position: absolute; left: 33px; top: 0; bottom: 0; width: 2px; background: var(--line); }
+.stage-row:first-child::before { top: 22px; }
+.stage-row:last-child::before { bottom: calc(100% - 22px); }
+.stage-num { position: relative; z-index: 1; width: 24px; height: 24px; margin: 11px 0 0 9px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 12px; font-weight: 700; background: var(--panel); border: 2px solid var(--line-strong); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.stage-row.done .stage-num { background: var(--ok); border-color: var(--ok); color: #fff; }
+.stage-row.in_progress .stage-num { border-color: var(--claude); color: var(--claude); }
+.stage-row.failed .stage-num, .stage-row.blocked .stage-num { border-color: var(--bad); color: var(--bad); }
+.stage-row.skipped .stage-num { border-style: dashed; }
+.stage-body { border-bottom: 1px solid var(--line); padding: 10px 0 12px; min-width: 0; }
+.stage-row:last-child .stage-body { border-bottom: 0; }
+.stage-top { display: flex; align-items: center; gap: 12px; width: 100%; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+.stage-title { flex: 1; min-width: 0; font-weight: 600; line-height: 1.35; }
+.stage-row.pending .stage-title, .stage-row.blocked .stage-title, .stage-row.skipped .stage-title { color: var(--ink-2); font-weight: 500; }
+.stage-meta { display: flex; gap: 12px; align-items: center; color: var(--ink-3); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.track { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 9px; max-width: 520px; }
+.seg { height: 6px; border-radius: 3px; background: var(--line); position: relative; overflow: hidden; }
+.seg.on.planner { background: var(--planner); }
+.seg.on.claude { background: var(--claude); }
+.seg.on.probe { background: var(--ink-3); }
+.seg.bad { background: var(--bad); }
+.seg.live::after { content: ""; position: absolute; inset: 0;
+  background: repeating-linear-gradient(-45deg, transparent 0 6px, rgba(255,255,255,.45) 6px 12px); animation: slide 1.1s linear infinite; }
+@keyframes slide { from { background-position: 0 0; } to { background-position: 34px 0; } }
+@media (prefers-reduced-motion: reduce) { .seg.live::after { animation: none; } }
+.track-labels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; max-width: 520px; font-size: 11.5px; color: var(--ink-3); margin-top: 3px; }
+.stage-now { font-size: 13px; color: var(--ink-2); margin-top: 6px; }
+.verdict { margin-top: 8px; font-size: 13px; color: var(--ink-2); max-width: 80ch; }
+.verdict b { color: var(--ink); }
+
+.attempts { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.attempt { border: 1px solid var(--line); border-radius: 9px; background: var(--sunken); padding: 12px 14px; }
+.attempt h4 { margin: 0 0 8px; font-size: 13.5px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.checks { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.checks li { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; }
+.checks .ok { color: var(--ok); font-weight: 700; }
+.checks .no { color: var(--bad); font-weight: 700; }
+pre.block { margin: 6px 0 0; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 7px;
+  font: 12px/1.55 var(--mono); white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }
+details.more > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; margin-top: 8px; }
+
+/* ---------- decision cards ---------- */
+.decision { border: 1px solid var(--line); border-left: 4px solid var(--warn); border-radius: 12px; background: var(--panel); margin-bottom: 18px; }
+.decision.plan { border-left-color: var(--planner); }
+.decision-head { padding: 16px 20px 6px; }
+.decision-head h3 { margin: 0 0 4px; font-size: 17px; }
+.decision-head p { margin: 0; color: var(--ink-2); }
+.decision-body { padding: 10px 20px 18px; }
+.plan-task { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px; padding: 12px 0; border-top: 1px solid var(--line); }
+.plan-task:first-child { border-top: 0; }
+.plan-num { font-weight: 700; color: var(--planner); padding-top: 7px; font-variant-numeric: tabular-nums; }
+.plan-fields { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.plan-fields .input { font-weight: 600; }
+.plan-fields .textarea { min-height: 60px; }
+.plan-tools { display: flex; flex-direction: column; gap: 4px; }
+.question-text { white-space: pre-wrap; background: var(--sunken); border-radius: 8px; padding: 10px 12px; margin: 0 0 10px; }
+
+.console { margin-top: 18px; }
+.console summary { cursor: pointer; color: var(--ink-2); font-weight: 500; }
+.console pre { margin: 10px 0 0; background: #121820; color: #cfd6df; border-radius: 10px; padding: 12px 14px; font: 12px/1.55 var(--mono);
+  height: 300px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+
+/* ---------- history ---------- */
+.table-wrap { overflow-x: auto; }
+table.list { width: 100%; border-collapse: collapse; }
+table.list th { text-align: left; font-size: 12.5px; color: var(--ink-3); font-weight: 600; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+table.list td { padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.list tr:last-child td { border-bottom: 0; }
+table.list tbody tr { cursor: pointer; }
+table.list tbody tr:hover td { background: var(--sunken); }
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* ---------- rules & prompts ---------- */
+.scope-switch { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+.scope-switch button { border: 0; background: var(--panel); padding: 6px 12px; cursor: pointer; color: var(--ink-2); }
+.scope-switch button[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
+.contexts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.context { text-align: left; border: 1px solid var(--line); background: var(--panel); border-radius: 12px; padding: 14px; cursor: pointer; display: flex; flex-direction: column; gap: 10px; }
+.context:hover { border-color: var(--line-strong); }
+.context[aria-checked="true"] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.context-name { font-weight: 650; display: flex; justify-content: space-between; gap: 8px; }
+.context-desc { color: var(--ink-2); font-size: 13px; }
+.layers { display: flex; flex-direction: column; gap: 4px; }
+.layer { font-size: 12px; padding: 3px 8px; border-radius: 5px; background: var(--claude-soft); color: var(--claude); font-weight: 600; }
+.layer.off { background: transparent; color: var(--ink-3); border: 1px dashed var(--line-strong); font-weight: 400; text-decoration: line-through; }
+.inherit-note { margin-top: 10px; }
+
+.prompts { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 0; min-height: 520px; }
+.prompt-list { border-right: 1px solid var(--line); padding: 12px 8px; }
+.prompt-group { margin-bottom: 14px; }
+.prompt-group h4 { display: flex; align-items: center; gap: 8px; margin: 4px 8px 6px; font-size: 13px; }
+.prompt-item { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 7px 8px; border-radius: 7px; cursor: pointer; }
+.prompt-item:hover { background: var(--sunken); }
+.prompt-item[aria-current="true"] { background: var(--sunken); box-shadow: inset 3px 0 0 var(--ink); }
+.prompt-item .t { display: flex; justify-content: space-between; gap: 6px; font-weight: 550; }
+.prompt-item .s { font-size: 12px; color: var(--ink-3); }
+.badge { font-size: 11.5px; padding: 0 7px; border-radius: 999px; background: var(--sunken); color: var(--ink-3); font-weight: 600; white-space: nowrap; }
+.badge.project { background: var(--planner-soft); color: var(--planner); }
+.badge.global { background: var(--warn-soft); color: var(--warn); }
+.prompt-editor { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.prompt-editor .textarea { flex: 1; min-height: 420px; }
+.vars { display: flex; gap: 6px; flex-wrap: wrap; }
+.vars code { background: var(--sunken); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; }
+
+.settings-group { margin-bottom: 28px; }
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px 22px; }
+
+.banner { display: flex; gap: 12px; align-items: center; padding: 12px 16px; border-radius: 10px; background: var(--warn-soft); color: var(--ink); margin-bottom: 18px; flex-wrap: wrap; }
+
+/* ---------- overlays ---------- */
+.modal-backdrop { position: fixed; inset: 0; background: rgba(15, 20, 28, .45); display: grid; place-items: center; padding: 20px; z-index: 20; }
+.modal { width: min(620px, 100%); max-height: min(720px, 90vh); display: flex; flex-direction: column; background: var(--panel); border-radius: 14px; border: 1px solid var(--line); box-shadow: 0 24px 60px rgba(0,0,0,.25); }
+.modal.wide { width: min(900px, 100%); }
+.modal-head { padding: 16px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
+.modal-head h3 { margin: 0; font-size: 17px; flex: 1; }
+.modal-body { padding: 14px 20px; overflow: auto; }
+.modal-foot { padding: 12px 20px; border-top: 1px solid var(--line); display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.folder-list { list-style: none; margin: 10px 0 0; padding: 0; border: 1px solid var(--line); border-radius: 8px; max-height: 320px; overflow: auto; }
+.folder-list button { width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: var(--panel); padding: 8px 12px; cursor: pointer; }
+.folder-list li:last-child button { border-bottom: 0; }
+.folder-list button:hover { background: var(--sunken); }
+.toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: var(--ink); color: var(--panel); padding: 9px 16px; border-radius: 8px; z-index: 30; box-shadow: 0 8px 24px rgba(0,0,0,.2); max-width: 90vw; }
+.toast.error { background: var(--bad); color: #fff; }
+
+@media (max-width: 860px) {
+  .app { grid-template-columns: 1fr; }
+  .sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .main { padding: 20px 16px 60px; }
+  .prompts { grid-template-columns: 1fr; }
+  .prompt-list { border-right: 0; border-bottom: 1px solid var(--line); }
+  .stage-meta { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main" id="main" tabindex="-1"></main>
+</div>
+<div id="overlay"></div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script>
+const TOKEN = "{{TOKEN}}";
+const $ = (sel, root = document) => root.querySelector(sel);
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+async function api(method, url, body) {
+  const response = await fetch(url, {
+    method,
+    headers: { "X-MMCO-Token": TOKEN, "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+  return data;
+}
+
+let toastTimer;
+function toast(message, isError = false) {
+  const el = $("#toast");
+  el.textContent = message;
+  el.className = "toast" + (isError ? " error" : "");
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.hidden = true), isError ? 6000 : 2600);
+}
+async function attempt(fn, success) {
+  try { const result = await fn(); if (success) toast(success); return result; }
+  catch (error) { toast(error.message, true); return null; }
+}
+
+const STATUS_TEXT = {
+  planning: "Planning", executing: "Working", awaiting_input: "Needs you", awaiting_approval: "Plan ready",
+  paused: "Paused", done: "Done", failed: "Failed", cancelled: "Cancelled",
+  pending: "Waiting", in_progress: "In progress", blocked: "Blocked", skipped: "Skipped",
+};
+function statusClass(status, running) {
+  if (running) return "running";
+  if (["done"].includes(status)) return "done";
+  if (["failed", "blocked"].includes(status)) return "failed";
+  if (["awaiting_input", "awaiting_approval", "paused"].includes(status)) return "waiting";
+  return "";
+}
+const pill = (status, running) => `<span class="pill ${statusClass(status, running)}">${esc(running && ["planning", "executing"].includes(status) ? (status === "planning" ? "Planning" : "Working") : STATUS_TEXT[status] || status)}</span>`;
+const money = (v) => `$${(Number(v) || 0).toFixed(2)}`;
+function duration(ms) {
+  const s = Math.round((ms || 0) / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m}m ${String(s % 60).padStart(2, "0")}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+function ago(iso) {
+  if (!iso) return "";
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} h ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+/* ---------------- state & routing ---------------- */
+const state = {
+  overview: null,
+  route: { view: "home" },
+  project: null,
+  sessionId: null,
+  session: null,
+  expanded: new Set(),
+  details: {},
+  rules: { scope: "global", data: null, prompts: null, prompt: null, promptName: "planner_plan.txt", dirty: false },
+  settings: null,
+};
+
+function parseRoute() {
+  const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
+  if (parts[0] === "project" && parts[1]) return { view: "project", path: parts[1], tab: parts[2] || "work", session: parts[3] || null };
+  if (parts[0] === "rules") return { view: "rules" };
+  if (parts[0] === "settings") return { view: "settings" };
+  return { view: "home" };
+}
+function go(route) {
+  let hash = "#/";
+  if (route.view === "project") hash = `#/project/${encodeURIComponent(route.path)}/${route.tab || "work"}${route.session ? "/" + route.session : ""}`;
+  if (route.view === "rules") hash = "#/rules";
+  if (route.view === "settings") hash = "#/settings";
+  if (location.hash === hash) onRoute(); else location.hash = hash;
+}
+window.addEventListener("hashchange", onRoute);
+
+async function onRoute() {
+  const route = parseRoute();
+  const projectChanged = route.path !== state.route.path;
+  state.route = route;
+  if (projectChanged) { state.expanded.clear(); state.details = {}; state.session = null; state.sessionId = null; }
+  renderSidebar();
+  if (route.view === "project") await loadProject();
+  else if (route.view === "rules") { state.rules.scope = "global"; await loadRules(); }
+  else if (route.view === "settings") await loadSettings();
+  else renderHome();
+  $("#main").scrollTop = 0;
+}
+
+async function refreshOverview() {
+  const data = await attempt(() => api("GET", "/api/overview"));
+  if (data) { state.overview = data; renderSidebar(); }
+}
+
+/* ---------------- sidebar ---------------- */
+function renderSidebar() {
+  const projects = state.overview?.projects || [];
+  const route = state.route;
+  $("#sidebar").innerHTML = `
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"><span></span><span></span></div>
+      <div><div class="brand-name">mmco</div><div class="brand-sub">DeepSeek plans, Claude builds</div></div>
+    </div>
+    <nav aria-label="Projects">
+      <h2 class="nav-heading">Projects</h2>
+      <ul class="nav-list">
+        ${projects.map((p) => `
+          <li><button class="nav-item" data-go-project="${esc(p.path)}" title="${esc(p.path)}" ${route.view === "project" && route.path === p.path ? 'aria-current="page"' : ""}>
+            <span class="dot ${p.running ? "running" : statusClass(p.status)}" aria-hidden="true"></span>
+            <span class="name">${esc(p.name)}</span>
+          </button></li>`).join("")}
+        <li><button class="nav-item" data-action="add-project"><span class="nav-icon" aria-hidden="true">+</span><span class="name">Add a project folder</span></button></li>
+      </ul>
+    </nav>
+    <div class="sidebar-foot">
+      <button class="nav-item" data-go="rules" ${route.view === "rules" ? 'aria-current="page"' : ""}><span class="nav-icon" aria-hidden="true">¶</span><span class="name">Rules and prompts</span></button>
+      <button class="nav-item" data-go="settings" ${route.view === "settings" ? 'aria-current="page"' : ""}><span class="nav-icon" aria-hidden="true">⚙</span><span class="name">Settings</span></button>
+    </div>`;
+}
+
+function setupBanner() {
+  const setup = state.overview?.setup;
+  if (!setup) return "";
+  const problems = [];
+  if (!setup.key_set) problems.push("The OpenRouter key is missing, so DeepSeek cannot plan.");
+  if (!setup.claude) problems.push("Claude Code was not found on this computer.");
+  if (!setup.git) problems.push("git is not installed.");
+  if (!problems.length) return "";
+  return `<div class="banner"><span>${problems.map(esc).join(" ")}</span><span class="spacer"></span>${!setup.key_set ? '<button class="btn small" data-go="settings">Open settings</button>' : ""}</div>`;
+}
+
+/* ---------------- home ---------------- */
+function renderHome() {
+  const projects = state.overview?.projects || [];
+  if (projects.length) { go({ view: "project", path: projects[0].path }); return; }
+  $("#main").innerHTML = `<div class="page">${setupBanner()}
+    <div class="surface empty">
+      <h2>Pick a folder to work in</h2>
+      <p>It can be an existing project or an empty folder for something new.<br>Every finished task becomes a git commit there.</p>
+      <p><button class="btn primary" data-action="add-project">Choose a folder</button></p>
+    </div></div>`;
+}
+
+/* ---------------- project ---------------- */
+let pollTimer = null;
+function stopPolling() { clearTimeout(pollTimer); pollTimer = null; }
+
+async function loadProject() {
+  stopPolling();
+  const route = state.route;
+  const data = await attempt(() => api("GET", `/api/project?path=${encodeURIComponent(route.path)}`));
+  if (!data) return;
+  state.project = data;
+  if (route.tab === "rules") { state.rules.scope = "project"; renderProjectFrame(); await loadRules(); return; }
+  if (route.tab === "history") { renderProjectFrame(); renderHistory(); return; }
+  const active = data.sessions.find((s) => ["planning", "executing", "awaiting_input", "awaiting_approval", "paused"].includes(s.status) || s.running);
+  state.sessionId = route.session || active?.id || null;
+  renderProjectFrame();
+  renderWork();
+  if (state.sessionId) await pollSession();
+}
+
+function renderProjectFrame() {
+  const p = state.project;
+  const tab = state.route.tab || "work";
+  $("#main").innerHTML = `<div class="page">
+    ${setupBanner()}
+    <header class="page-head">
+      <div>
+        <h1 class="page-title">${esc(p.name)}</h1>
+        <p class="page-path">${esc(p.path)}</p>
+      </div>
+      <div class="head-actions">
+        <span class="pill ${p.context === "full" ? "" : "running"}" title="How much Claude is told">Claude sees: ${esc({ full: "everything", task: "only its task", minimal: "minimal instructions" }[p.context] || p.context)}</span>
+        <button class="btn" data-action="open-vscode">Open in VS Code</button>
+      </div>
+    </header>
+    <div class="tabs" role="tablist">
+      ${[["work", "Work"], ["history", "History"], ["rules", "Rules and prompts"]].map(([id, label]) =>
+        `<button class="tab" role="tab" aria-selected="${tab === id}" data-tab="${id}">${label}</button>`).join("")}
+    </div>
+    <div id="tab-body"></div>
+  </div>`;
+}
+
+function renderWork() {
+  const body = $("#tab-body");
+  const busy = state.project.busy;
+  body.innerHTML = `
+    <div id="decision"></div>
+    <div id="board"></div>
+    <section class="section" id="composer-section">
+      <h2 class="section-title">${state.sessionId ? "Next request" : "What should be built?"}</h2>
+      <p class="section-lede">Describe the result you want. DeepSeek turns it into tasks for Claude Code${state.project.sessions.length ? " and knows what was built here before" : ""}.</p>
+      <form class="surface composer" id="composer">
+        <textarea class="textarea" id="request" aria-label="Request" placeholder="For example: a REST API for a book library with login, CRUD and search, with tests" ${busy ? "disabled" : ""}></textarea>
+        <div class="composer-foot">
+          <label class="check"><input type="checkbox" id="approve" checked> Show me the plan before Claude starts</label>
+          <span class="spacer"></span>
+          ${busy ? '<span class="muted">Wait until the current work finishes or pause it.</span>' : ""}
+          <button class="btn primary" type="submit" ${busy ? "disabled" : ""}>Start</button>
+        </div>
+      </form>
+    </section>`;
+}
+
+async function pollSession() {
+  stopPolling();
+  if (!state.sessionId || state.route.view !== "project" || (state.route.tab || "work") !== "work") return;
+  const data = await api("GET", `/api/sessions/${state.sessionId}`).catch((e) => { toast(e.message, true); return null; });
+  if (!data) return;
+  const previous = state.session;
+  state.session = data;
+  renderDecision();
+  renderBoard();
+  const status = data.session?.status;
+  const live = data.running || !data.session;
+  if (previous?.running && !data.running) { refreshOverview(); refreshProjectMeta(); }
+  if (live || ["planning", "executing"].includes(status)) pollTimer = setTimeout(pollSession, 1500);
+  else pollTimer = setTimeout(pollSession, 6000);
+}
+
+async function refreshProjectMeta() {
+  const data = await api("GET", `/api/project?path=${encodeURIComponent(state.route.path)}`).catch(() => null);
+  if (!data) return;
+  const wasBusy = state.project.busy;
+  state.project = data;
+  if (wasBusy !== data.busy) {
+    const request = $("#request");
+    const draft = request?.value;
+    renderWork(); renderDecision(); renderBoard();
+    if (draft && $("#request")) $("#request").value = draft;
+  }
+}
+
+/* ---- decision cards: rebuilt only when the question changes, so typing is never lost ---- */
+function renderDecision() {
+  const holder = $("#decision");
+  if (!holder) return;
+  const data = state.session;
+  const s = data?.session;
+  let key = "none";
+  if (s && !data.running && s.status === "awaiting_approval" && s.proposed_plan && !s.decision_pending) key = "plan:" + s.id + ":" + JSON.stringify(s.proposed_plan).length;
+  else if (s && !data.running && data.questions?.length) key = "q:" + data.questions.map((q) => q.id).join(",");
+  if (holder.dataset.key === key) return;
+  holder.dataset.key = key;
+  if (key === "none") { holder.innerHTML = ""; return; }
+  if (key.startsWith("plan:")) { holder.innerHTML = planCard(s.proposed_plan); return; }
+  holder.innerHTML = data.questions.map(questionCard).join("");
+}
+
+function planCard(tasks) {
+  return `<section class="decision plan" aria-labelledby="plan-title">
+    <div class="decision-head">
+      <h3 id="plan-title">DeepSeek's plan: ${tasks.length} task${tasks.length === 1 ? "" : "s"}</h3>
+      <p>Edit titles, descriptions and checks, remove tasks, or ask for a different plan. Claude starts when you run it.</p>
+    </div>
+    <div class="decision-body">
+      <ol id="plan-tasks" style="list-style:none;margin:0;padding:0">${tasks.map(planTaskRow).join("")}</ol>
+      <div class="field" style="margin-top:14px">
+        <label class="label" for="plan-feedback">Or ask for changes</label>
+        <textarea class="textarea" id="plan-feedback" rows="2" placeholder="For example: use FastAPI instead of Flask and leave out login for now"></textarea>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn planner" data-action="plan-approve">Run this plan</button>
+        <button class="btn" data-action="plan-change">Make a new plan</button>
+        <span class="spacer"></span>
+        <button class="btn quiet danger" data-action="plan-cancel">Cancel request</button>
+      </div>
+    </div>
+  </section>`;
+}
+function planTaskRow(task, index) {
+  const extra = JSON.stringify({ acceptance_criteria: task.acceptance_criteria || [], files_involved: task.files_involved || [], interface_contracts: task.interface_contracts || {}, needs_continuity: !!task.needs_continuity });
+  return `<li class="plan-task" data-extra="${esc(extra)}">
+    <div class="plan-num">${index + 1}</div>
+    <div class="plan-fields">
+      <input class="input" data-f="title" value="${esc(task.title)}" aria-label="Task ${index + 1} title">
+      <textarea class="textarea" data-f="description" rows="${Math.min(14, Math.max(4, Math.ceil((task.description || "").length / 110) + (task.description || "").split("\n").length))}" aria-label="Task ${index + 1} description">${esc(task.description)}</textarea>
+      <details class="more"><summary>Checks that must pass (${(task.verify_commands || []).length})${(task.acceptance_criteria || []).length ? " and acceptance criteria" : ""}</summary>
+        <div class="field" style="margin-top:8px">
+          <textarea class="textarea code" data-f="verify" rows="3" aria-label="Checks, one command per line">${esc((task.verify_commands || []).join("\n"))}</textarea>
+          <span class="help">One shell command per line, run from the project folder.</span>
+          ${(task.acceptance_criteria || []).length ? `<ul class="help" style="margin:4px 0 0;padding-left:18px">${task.acceptance_criteria.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
+        </div>
+      </details>
+    </div>
+    <div class="plan-tools">
+      <button class="btn quiet small" data-action="plan-up" aria-label="Move up">↑</button>
+      <button class="btn quiet small" data-action="plan-down" aria-label="Move down">↓</button>
+      <button class="btn quiet small danger" data-action="plan-remove" aria-label="Remove task">✕</button>
+    </div>
+  </li>`;
+}
+function collectPlan() {
+  return [...document.querySelectorAll("#plan-tasks .plan-task")].map((row, index) => ({
+    ...JSON.parse(row.dataset.extra || "{}"),
+    order_index: index,
+    title: row.querySelector('[data-f="title"]').value.trim(),
+    description: row.querySelector('[data-f="description"]').value.trim(),
+    verify_commands: row.querySelector('[data-f="verify"]').value.split("\n").map((l) => l.trim()).filter(Boolean),
+  }));
+}
+function renumberPlan() {
+  document.querySelectorAll("#plan-tasks .plan-num").forEach((el, i) => (el.textContent = i + 1));
+}
+
+function questionCard(q) {
+  if (q.kind === "escalation") {
+    return `<section class="decision" data-question="${esc(q.id)}">
+      <div class="decision-head"><h3>A task is stuck</h3><p>Tell it what to do differently, try again as is, skip it, or stop.</p></div>
+      <div class="decision-body">
+        <p class="question-text">${esc(q.question)}</p>
+        <div class="field">
+          <label class="label" for="g-${esc(q.id)}">Guidance for the next attempt</label>
+          <textarea class="textarea" id="g-${esc(q.id)}" rows="2" placeholder="For example: the tests need a running database; use SQLite in memory instead"></textarea>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn primary" data-action="escalate" data-choice="guide">Send guidance</button>
+          <button class="btn" data-action="escalate" data-choice="retry">Try again</button>
+          <button class="btn" data-action="escalate" data-choice="skip">Skip this task</button>
+          <span class="spacer"></span>
+          <button class="btn quiet danger" data-action="escalate" data-choice="abort">Stop the session</button>
+        </div>
+      </div></section>`;
+  }
+  return `<section class="decision" data-question="${esc(q.id)}">
+    <div class="decision-head"><h3>DeepSeek has a question</h3><p>Your answer goes into the next plan or prompt.</p></div>
+    <div class="decision-body">
+      <p class="question-text">${esc(q.question)}</p>
+      <textarea class="textarea" data-answer="${esc(q.id)}" rows="2" aria-label="Your answer"></textarea>
+      <div class="row" style="margin-top:12px"><button class="btn primary" data-action="answer">Send answer</button></div>
+    </div></section>`;
+}
+
+/* ---- the relay board ---- */
+function renderBoard() {
+  const holder = $("#board");
+  if (!holder) return;
+  const data = state.session;
+  if (!data) { holder.innerHTML = ""; return; }
+  const consoleOpen = $("#console")?.open ?? false;
+  const logEl = $("#console pre");
+  const stick = !logEl || logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 30;
+  const s = data.session;
+
+  if (!s) {
+    holder.innerHTML = `<section class="section surface pad">
+      <div class="row"><span class="pill running">Starting</span><span class="muted">${data.running ? "Preparing the project and asking DeepSeek for a plan." : "The run stopped before it could start. The log below says why."}</span></div>
+      ${consoleBlock(data.log, true)}</section>`;
+    scrollConsole(stick);
+    return;
+  }
+  const sum = data.summary;
+  const running = data.running;
+  const statusLine = running
+    ? (s.status === "planning" ? "DeepSeek is writing the plan." : "Work in progress.")
+    : { awaiting_approval: "The plan is waiting for you above.", awaiting_input: "Waiting for your answer above.", paused: s.note ? `Paused: ${s.note}` : "Paused.", done: "Finished. Every check passed and the final review is complete.", failed: s.note || "Stopped.", cancelled: "Cancelled." }[s.status] || "";
+  holder.innerHTML = `<section class="section surface" aria-label="Current session">
+    <div class="run-head">
+      <div style="min-width:0;flex:1">
+        <p class="run-request">${esc(s.request)}</p>
+        <div class="run-stats">
+          ${pill(s.status, running)}
+          <span><b>${sum.done}</b> of <b>${sum.tasks}</b> tasks done</span>
+          <span>Claude <b>${duration(sum.executor_time_ms)}</b></span>
+          <span>Cost <b>${money(sum.executor_cost_usd + sum.planner_cost_usd)}</b></span>
+          ${sum.reformulations ? `<span>Prompt rewrites <b>${sum.reformulations}</b></span>` : ""}
+        </div>
+        <p class="stage-now" style="margin-top:8px">${esc(statusLine)}</p>
+      </div>
+      <div class="row">
+        ${running ? '<button class="btn" data-action="pause">Pause</button>' : ""}
+        ${!running && ["paused", "failed"].includes(s.status) ? '<button class="btn primary" data-action="resume">Resume</button>' : ""}
+        ${state.route.session ? `<button class="btn quiet" data-action="close-session">Back to current work</button>` : ""}
+      </div>
+    </div>
+    ${data.tasks.length ? `<div class="agents" aria-hidden="true">
+      <span class="agent"><span class="swatch planner"></span>DeepSeek writes and reviews</span>
+      <span class="agent"><span class="swatch claude"></span>Claude Code builds</span>
+      <span class="agent"><span class="swatch probe"></span>Checks run</span>
+    </div>
+    <ol class="relay">${data.tasks.map((t, i) => taskRow(t, i, running)).join("")}</ol>` : ""}
+    <div class="pad" style="padding-top:${data.tasks.length ? 6 : 14}px">${consoleBlock(data.log, consoleOpen || (!data.tasks.length && running))}</div>
+  </section>`;
+  scrollConsole(stick);
+}
+
+function consoleBlock(log, open) {
+  return `<details class="console" id="console" ${open ? "open" : ""}><summary>Live log</summary><pre>${esc(log || "No output yet.")}</pre></details>`;
+}
+function scrollConsole(stick) {
+  const el = $("#console pre");
+  if (el && stick) el.scrollTop = el.scrollHeight;
+}
+
+function taskSegments(t, running) {
+  // brief (planner) · build (claude) · checks · verdict (planner)
+  const segs = [["planner", false, false], ["claude", false, false], ["probe", false, false], ["planner", false, false]];
+  const on = (i, live = false) => { segs[i][1] = true; segs[i][2] = live; };
+  const failedChecks = t.checks.some((c) => !c.passed);
+  if (t.status === "done") [0, 1, 2, 3].forEach((i) => on(i));
+  else if (t.status === "in_progress") {
+    on(0);
+    if (t.stage === "review") { on(1); on(2); on(3, running); }
+    else on(1, running);
+  } else if (t.attempts > 0) { on(0); on(1); on(2); }
+  return segs.map(([kind, lit, live], i) => {
+    const bad = i === 2 && failedChecks && t.status !== "done" && t.stage !== "build";
+    return `<span class="seg ${lit ? "on " + kind : ""} ${bad ? "bad" : ""} ${live ? "live" : ""}"></span>`;
+  }).join("");
+}
+function stageNow(t, running) {
+  if (t.status === "in_progress") {
+    if (!running) return "Interrupted here. Resume to continue.";
+    return t.stage === "review" ? "DeepSeek is reviewing the result." : `Claude is working on attempt ${t.attempts + 1}.`;
+  }
+  if (t.status === "pending" && t.attempts > 0) return `Going again after attempt ${t.attempts}${t.reformulated ? " with a rewritten prompt" : ""}.`;
+  return "";
+}
+function taskRow(t, index, running) {
+  const open = state.expanded.has(t.id);
+  const verdict = t.last_verdict;
+  const now = stageNow(t, running);
+  return `<li class="stage-row ${t.status}">
+    <span class="stage-num" aria-hidden="true">${t.status === "done" ? "✓" : index + 1}</span>
+    <div class="stage-body">
+      <button class="stage-top" data-action="toggle-task" data-task="${esc(t.id)}" aria-expanded="${open}">
+        <span class="stage-title">${esc(t.title)}</span>
+        <span class="stage-meta">
+          ${t.attempts > 1 ? `<span>${t.attempts} attempts</span>` : ""}
+          ${t.duration_ms ? `<span>${duration(t.duration_ms)}</span>` : ""}
+          ${t.cost ? `<span>${money(t.cost)}</span>` : ""}
+          ${["pending", "done", "in_progress"].includes(t.status) ? "" : pill(t.status)}
+        </span>
+      </button>
+      <div class="track" aria-hidden="true">${taskSegments(t, running)}</div>
+      ${now ? `<p class="stage-now">${esc(now)}</p>` : ""}
+      ${verdict && t.status !== "done" && !open ? `<p class="verdict"><b>Last review:</b> ${esc(verdict.reason)}</p>` : ""}
+      ${open ? `<div class="attempts" id="detail-${esc(t.id)}">${taskDetail(t)}</div>` : ""}
+    </div>
+  </li>`;
+}
+
+function taskDetail(t) {
+  const detail = state.details[state.sessionId];
+  if (!detail) { loadDetail(); return '<p class="muted">Loading attempts…</p>'; }
+  const executions = detail.executions.filter((e) => e.task_id === t.id);
+  const evaluations = Object.fromEntries(detail.evaluations.map((e) => [e.execution_id, e]));
+  const task = detail.tasks.find((x) => x.id === t.id);
+  if (executions.length < t.attempts || (t.status === "in_progress" && detail._stamp !== stamp())) loadDetail();
+  const parts = [`<div class="attempt"><h4>Task given to Claude</h4><pre class="block">${esc(task?.description || t.description)}</pre>
+    ${task?.prompt_override ? `<details class="more"><summary>Rewritten prompt after a failed attempt</summary><pre class="block">${esc(task.prompt_override)}</pre></details>` : ""}</div>`];
+  for (const ex of executions) {
+    const ev = evaluations[ex.id];
+    const r = ex.result;
+    const checks = [...ex.verify_results.map((v) => ({ ...v, kind: "" })), ...(ex.regression_results || []).filter((v) => v.exit_code !== 0 || v.timed_out).map((v) => ({ ...v, kind: "earlier task" }))];
+    parts.push(`<div class="attempt">
+      <h4>Attempt ${ex.attempt} ${ev ? `<span class="pill ${ev.satisfied ? "done" : "waiting"}">${esc({ continue: "Accepted", retry: "Sent back", reformulate: "Prompt rewritten", add_task: "Added tasks", clarify: "Asked you", fail: "Stuck" }[ev.next_action] || ev.next_action)}</span>` : ""}
+        <span class="muted" style="font-weight:400">${duration(r.duration_ms)}${r.cost_usd != null ? ", " + money(r.cost_usd) : ""}${r.timed_out ? ", timed out" : ""}${ex.refusal_detected ? ", refusal detected" : ""}</span></h4>
+      ${ev ? `<p class="verdict" style="margin-top:0"><b>DeepSeek:</b> ${esc(ev.reason)}</p>` : ""}
+      ${checks.length ? `<ul class="checks">${checks.map((v) => `<li><span class="${v.exit_code === 0 && !v.timed_out ? "ok" : "no"}">${v.exit_code === 0 && !v.timed_out ? "✓" : "✗"}</span><code>${esc(v.command)}</code>${v.kind ? `<span class="muted">(${v.kind})</span>` : ""}</li>`).join("")}</ul>` : ""}
+      <details class="more"><summary>Claude's report</summary><pre class="block">${esc(r.result_text || "(empty)")}</pre></details>
+      ${ex.diff_stat ? `<details class="more"><summary>Changed files</summary><pre class="block">${esc(ex.diff_stat)}</pre></details>` : ""}
+      ${checks.some((v) => v.exit_code !== 0 || v.timed_out) ? `<details class="more"><summary>Check output</summary><pre class="block">${esc(checks.filter((v) => v.exit_code !== 0 || v.timed_out).map((v) => "$ " + v.command + "\n" + v.output).join("\n\n"))}</pre></details>` : ""}
+      ${ev?.feedback_for_executor ? `<details class="more"><summary>Feedback sent back to Claude</summary><pre class="block">${esc(ev.feedback_for_executor)}</pre></details>` : ""}
+      <details class="more"><summary>Exact prompt Claude received</summary><pre class="block">${esc(r.prompt)}</pre></details>
+    </div>`);
+  }
+  return parts.join("");
+}
+const stamp = () => `${state.session?.summary?.executions}:${state.session?.tasks?.filter((t) => t.last_verdict).length}`;
+let detailLoading = false;
+async function loadDetail() {
+  if (detailLoading || !state.sessionId) return;
+  detailLoading = true;
+  try {
+    const data = await api("GET", `/api/sessions/${state.sessionId}/detail`);
+    data._stamp = stamp();
+    state.details[state.sessionId] = data;
+    renderBoard();
+  } catch (e) { toast(e.message, true); }
+  finally { detailLoading = false; }
+}
+
+/* ---------------- history ---------------- */
+function renderHistory() {
+  const sessions = state.project.sessions;
+  $("#tab-body").innerHTML = sessions.length ? `<div class="surface table-wrap"><table class="list">
+    <thead><tr><th>Request</th><th>Status</th><th class="num">Tasks</th><th class="num">Cost</th><th>When</th></tr></thead>
+    <tbody>${sessions.map((s) => `<tr data-open-session="${esc(s.id)}" tabindex="0">
+      <td>${esc(s.request)}</td><td>${pill(s.status, s.running)}</td>
+      <td class="num">${s.done}/${s.tasks}</td><td class="num">${money(s.cost)}</td><td class="muted" style="white-space:nowrap">${esc(ago(s.updated_at))}</td></tr>`).join("")}
+    </tbody></table></div>`
+    : `<div class="surface empty"><h2>Nothing built here yet</h2><p>Requests you run in this project will be listed here.</p><p><button class="btn" data-tab="work">Write the first request</button></p></div>`;
+}
+
+/* ---------------- rules & prompts ---------------- */
+const CONTEXTS = [
+  { id: "full", name: "Everything", desc: "Claude knows your request, the whole plan and your answers. Best results when the project is not secret.", layers: [1, 1, 1, 1] },
+  { id: "task", name: "Only its task", desc: "Claude gets one technical task at a time. It never sees your request, the plan or the discussion.", layers: [0, 0, 0, 1] },
+  { id: "minimal", name: "Minimal", desc: "Only DeepSeek's instructions and the checks, with a generic system prompt that does not mention this setup.", layers: [0, 0, 0, 1], minimal: true },
+];
+const LAYER_NAMES = ["Your request", "The plan", "Your answers", "Its task"];
+
+async function loadRules() {
+  const scope = state.rules.scope;
+  const path = scope === "project" ? state.route.path : null;
+  const q = path ? `&path=${encodeURIComponent(path)}` : "";
+  const [rules, prompts] = await Promise.all([
+    attempt(() => api("GET", `/api/rules?scope=${scope}${q}`)),
+    attempt(() => api("GET", `/api/prompts?${path ? "path=" + encodeURIComponent(path) : ""}`)),
+  ]);
+  if (!rules || !prompts) return;
+  state.rules.data = rules;
+  state.rules.prompts = prompts.prompts;
+  renderRules();
+  await openPrompt(state.rules.promptName);
+}
+
+function renderRules() {
+  const { data, prompts } = state.rules;
+  const scope = state.rules.scope;
+  const inProject = state.route.view === "project";
+  const selected = data.executor_context;
+  const target = inProject ? $("#tab-body") : $("#main");
+  const header = inProject ? "" : `<header class="page-head"><div><h1 class="page-title">Rules and prompts</h1>
+      <p class="page-path">These apply to every project unless a project sets its own.</p></div></header>`;
+  const choices = [...CONTEXTS];
+  target.innerHTML = `${inProject ? "" : '<div class="page">' + setupBanner()}${header}
+    <section class="section">
+      <h2 class="section-title">How much Claude knows</h2>
+      <p class="section-lede">mmco enforces this when it builds Claude's prompt, whatever DeepSeek writes.</p>
+      <div class="contexts" role="radiogroup" aria-label="How much Claude knows">
+        ${choices.map((c) => `<button class="context" role="radio" aria-checked="${selected === c.id}" data-context="${c.id}">
+          <span class="context-name">${esc(c.name)}${!selected && data.inherited_context === c.id ? '<span class="badge">in use</span>' : ""}</span>
+          <span class="layers">${LAYER_NAMES.map((n, i) => `<span class="layer ${c.layers[i] ? "" : "off"}">${esc(i === 3 && c.minimal ? "DeepSeek's instructions" : n)}</span>`).join("")}</span>
+          <span class="context-desc">${esc(c.desc)}</span>
+        </button>`).join("")}
+      </div>
+      ${scope === "project" ? `<p class="help inherit-note">${selected ? `This project overrides the global setting (${esc(data.inherited_context)}). <button class="btn quiet small" data-context="">Use the global setting</button>` : `Using the global setting: ${esc(data.inherited_context)}. Pick one above to override it for this project.`}</p>` : ""}
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">Rules for DeepSeek</h2>
+      <p class="section-lede">Plain-language rules added to every DeepSeek prompt: planning, reviewing, rewriting prompts and the final review. They take effect on the next DeepSeek call, even during a run.${scope === "project" ? " Global rules still apply; these are added after them." : ""}</p>
+      ${data.error ? `<div class="banner">${esc(data.error)}</div>` : ""}
+      <div class="surface pad">
+        <textarea class="textarea" id="rules-body" rows="8" placeholder="For example:
+- Give Claude purely technical instructions: exact files, function signatures and expected behaviour.
+- Never mention the product, its users or the business purpose.
+- Use TypeScript and pnpm. Do not add dependencies that are not listed in the task.">${esc(data.body)}</textarea>
+        <div class="row" style="margin-top:12px">
+          <button class="btn primary" data-action="save-rules">Save rules</button>
+          <button class="btn quiet" data-action="preview-planner">Show DeepSeek's full planning prompt</button>
+          <span class="spacer"></span><span class="help">Stored outside the project, so Claude cannot read it.</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">Prompts</h2>
+      <p class="section-lede">The complete instructions each agent receives. Saving creates your own version ${scope === "project" ? "for this project" : "for all projects"}; Reset brings back the default.</p>
+      <div class="surface prompts">
+        <nav class="prompt-list" aria-label="Prompt files">
+          ${[["planner", "DeepSeek"], ["executor", "Claude Code"]].map(([agent, name]) => `
+            <div class="prompt-group"><h4><span class="swatch ${agent === "planner" ? "planner" : "claude"}"></span>${name}</h4>
+            ${prompts.filter((p) => p.agent === agent).map((p) => `<button class="prompt-item" data-prompt="${esc(p.name)}" aria-current="${state.rules.promptName === p.name}">
+              <span class="t"><span>${esc(p.label)}</span>${p.source !== "built-in" ? `<span class="badge ${p.source}">${p.source === "project" ? "project" : "global"}</span>` : ""}</span>
+              <span class="s">${esc(p.description)}</span></button>`).join("")}</div>`).join("")}
+        </nav>
+        <div class="prompt-editor" id="prompt-editor"><p class="muted">Loading…</p></div>
+      </div>
+    </section>${inProject ? "" : "</div>"}`;
+}
+
+async function openPrompt(name) {
+  if (state.rules.dirty && !confirm("Discard unsaved changes to this prompt?")) return;
+  const scope = state.rules.scope;
+  const path = scope === "project" ? `&path=${encodeURIComponent(state.route.path)}` : "";
+  const prompt = await attempt(() => api("GET", `/api/prompt?name=${name}&scope=${scope}${path}`));
+  if (!prompt) return;
+  state.rules.promptName = name;
+  state.rules.prompt = prompt;
+  state.rules.dirty = false;
+  document.querySelectorAll(".prompt-item").forEach((el) => el.setAttribute("aria-current", el.dataset.prompt === name));
+  const where = scope === "project" ? "this project" : "all projects";
+  $("#prompt-editor").innerHTML = `
+    <div class="row">
+      <div style="flex:1;min-width:0">
+        <div class="section-title" style="font-size:16px">${esc(prompt.label)}</div>
+        <div class="help">${esc(prompt.description)} ${prompt.overridden ? `Your version for ${where}.` : `Showing the ${prompt.inherited_from === "global" ? "global" : "default"} version.`}</div>
+      </div>
+      ${name.startsWith("planner_") ? '<span class="pill planner">DeepSeek</span>' : '<span class="pill running">Claude Code</span>'}
+    </div>
+    ${prompt.variables.length ? `<div class="vars"><span class="help">Filled in by mmco:</span>${prompt.variables.map((v) => `<code>${esc(v)}</code>`).join("")}</div>` : ""}
+    <textarea class="textarea code" id="prompt-content" spellcheck="false" aria-label="Prompt text">${esc(prompt.content)}</textarea>
+    <div class="row">
+      <button class="btn primary" data-action="save-prompt">Save for ${where}</button>
+      ${prompt.overridden ? '<button class="btn" data-action="reset-prompt">Reset to default</button>' : ""}
+      <span class="spacer"></span>
+      <span class="help" id="prompt-dirty"></span>
+    </div>`;
+}
+
+/* ---------------- settings ---------------- */
+async function loadSettings() {
+  stopPolling();
+  const data = await attempt(() => api("GET", "/api/settings"));
+  if (!data) return;
+  state.settings = data;
+  const groups = [...new Set(data.fields.map((f) => f.group))];
+  $("#main").innerHTML = `<div class="page">${setupBanner()}
+    <header class="page-head"><div><h1 class="page-title">Settings</h1><p class="page-path">Saved in ${esc(data.file)}. New runs use them right away.</p></div></header>
+    <form id="settings-form">
+      ${groups.map((g) => `<section class="section settings-group"><h2 class="section-title">${esc(g)}</h2><div class="surface pad settings-grid">
+        ${data.fields.filter((f) => f.group === g).map(settingField).join("")}</div></section>`).join("")}
+      <div class="row"><button class="btn primary" type="submit">Save settings</button></div>
+    </form></div>`;
+}
+function settingField(f) {
+  const id = `set-${f.key}`;
+  let control;
+  if (f.kind === "bool") control = `<label class="check"><input type="checkbox" id="${id}" data-key="${f.key}" data-kind="bool" ${f.value ? "checked" : ""}> ${esc(f.label)}</label>`;
+  else if (f.kind === "choice") control = `<select class="select" id="${id}" data-key="${f.key}">${f.choices.map((c) => `<option ${c === f.value ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`;
+  else if (f.kind === "secret") control = `<input class="input" id="${id}" data-key="${f.key}" type="password" autocomplete="off" placeholder="${esc(f.hint)}">`;
+  else control = `<input class="input" id="${id}" data-key="${f.key}" ${["int", "number"].includes(f.kind) ? `inputmode="decimal"` : ""} value="${esc(f.value ?? "")}">`;
+  return `<div class="field">${f.kind === "bool" ? "" : `<label class="label" for="${id}">${esc(f.label)}</label>`}${control}
+    ${f.help || f.kind === "secret" ? `<span class="help">${esc(f.kind === "secret" ? `Currently ${f.hint}. Leave empty to keep it.` : f.help)}</span>` : ""}</div>`;
+}
+
+/* ---------------- modals ---------------- */
+function modal(html, wide = false) {
+  $("#overlay").innerHTML = `<div class="modal-backdrop" data-action="close-modal"><div class="modal ${wide ? "wide" : ""}" role="dialog" aria-modal="true">${html}</div></div>`;
+  setTimeout(() => $("#overlay input, #overlay button:not([data-action='close-modal'])")?.focus(), 0);
+}
+function closeModal() { $("#overlay").innerHTML = ""; }
+
+async function folderPicker(path) {
+  const data = await attempt(() => api("GET", `/api/fs${path ? "?path=" + encodeURIComponent(path) : ""}`));
+  if (!data) return;
+  modal(`<div class="modal-head"><h3>Choose a project folder</h3><button class="btn quiet small" data-action="close-modal" aria-label="Close">✕</button></div>
+    <div class="modal-body">
+      <div class="field"><label class="label" for="folder-path">Folder</label>
+        <div class="row" style="flex-wrap:nowrap"><input class="input mono" id="folder-path" value="${esc(data.path)}"><button class="btn" data-action="folder-go">Go</button></div></div>
+      <ul class="folder-list">
+        ${data.parent ? `<li><button data-folder="${esc(data.parent)}">.. (up one level)</button></li>` : ""}
+        ${data.dirs.map((d) => `<li><button data-folder="${esc(data.path + "/" + d)}">${esc(d)}</button></li>`).join("") || '<li><button disabled>No subfolders</button></li>'}
+      </ul>
+      <div class="field" style="margin-top:14px"><label class="label" for="new-folder">Or create a new folder here</label>
+        <div class="row" style="flex-wrap:nowrap"><input class="input" id="new-folder" placeholder="my-new-app"><button class="btn" data-action="folder-create">Create</button></div></div>
+    </div>
+    <div class="modal-foot"><button class="btn quiet" data-action="close-modal">Cancel</button><button class="btn primary" data-action="folder-use">Use this folder</button></div>`);
+}
+
+/* ---------------- events ---------------- */
+document.addEventListener("click", async (event) => {
+  const el = event.target.closest("[data-action], [data-go], [data-go-project], [data-tab], [data-prompt], [data-context], [data-folder], [data-open-session]");
+  if (!el) return;
+  if (el.dataset.action === "close-modal" && event.target !== el && !event.target.closest("button")) return;
+
+  if (el.dataset.goProject) return go({ view: "project", path: el.dataset.goProject });
+  if (el.dataset.go) return go({ view: el.dataset.go });
+  if (el.dataset.tab) return go({ view: "project", path: state.route.path, tab: el.dataset.tab });
+  if (el.dataset.prompt) return openPrompt(el.dataset.prompt);
+  if (el.dataset.folder) return folderPicker(el.dataset.folder);
+  if (el.dataset.openSession) return go({ view: "project", path: state.route.path, tab: "work", session: el.dataset.openSession });
+  if ("context" in el.dataset) {
+    const scope = state.rules.scope;
+    const body = $("#rules-body")?.value ?? state.rules.data.body;
+    const saved = await attempt(() => api("PUT", "/api/rules", { scope, path: scope === "project" ? state.route.path : null, executor_context: el.dataset.context || null, body }), "Saved. The next task uses this.");
+    if (saved) {
+      state.rules.data = saved; const name = state.rules.promptName; renderRules(); await openPrompt(name);
+      if (state.project && scope === "project") state.project.context = saved.executor_context || saved.inherited_context;
+    }
+    return;
+  }
+
+  const action = el.dataset.action;
+  const sid = state.sessionId;
+  switch (action) {
+    case "close-modal": return closeModal();
+    case "add-project": return folderPicker();
+    case "folder-go": return folderPicker($("#folder-path").value);
+    case "folder-create": {
+      const name = $("#new-folder").value.trim();
+      if (!name) return toast("Type a folder name first.", true);
+      const path = $("#folder-path").value.replace(/\/$/, "") + "/" + name;
+      const added = await attempt(() => api("POST", "/api/projects", { path, create: true }), "Folder created");
+      if (added) { closeModal(); await refreshOverview(); go({ view: "project", path: added.path }); }
+      return;
+    }
+    case "folder-use": {
+      const added = await attempt(() => api("POST", "/api/projects", { path: $("#folder-path").value }));
+      if (added) { closeModal(); await refreshOverview(); go({ view: "project", path: added.path }); }
+      return;
+    }
+    case "open-vscode": return attempt(() => api("POST", "/api/open", { path: state.route.path }), "Opening VS Code");
+    case "toggle-task": {
+      const id = el.dataset.task;
+      state.expanded.has(id) ? state.expanded.delete(id) : state.expanded.add(id);
+      return renderBoard();
+    }
+    case "pause": return attempt(() => api("POST", `/api/sessions/${sid}/pause`), "Pausing after cleaning up the current attempt").then(pollSession);
+    case "resume": return attempt(() => api("POST", `/api/sessions/${sid}/resume`), "Resumed").then(() => { state.project.busy = true; pollSession(); });
+    case "close-session": return go({ view: "project", path: state.route.path, tab: "work" });
+    case "plan-up": case "plan-down": case "plan-remove": {
+      const row = el.closest(".plan-task");
+      if (action === "plan-remove") {
+        if (document.querySelectorAll("#plan-tasks .plan-task").length === 1) return toast("A plan needs at least one task.", true);
+        row.remove();
+      } else if (action === "plan-up" && row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling);
+      else if (action === "plan-down" && row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling, row);
+      return renumberPlan();
+    }
+    case "plan-approve": {
+      const tasks = collectPlan();
+      if (tasks.some((t) => !t.description)) return toast("Every task needs a description.", true);
+      return decide({ action: "approve", tasks }, "Plan approved. Claude is starting.");
+    }
+    case "plan-change": {
+      const feedback = $("#plan-feedback").value.trim();
+      if (!feedback) { $("#plan-feedback").focus(); return toast("Describe what should change first.", true); }
+      return decide({ action: "change", feedback }, "Asking DeepSeek for a new plan");
+    }
+    case "plan-cancel": return decide({ action: "cancel" }, "Request cancelled");
+    case "answer": {
+      const answers = {};
+      document.querySelectorAll("[data-answer]").forEach((t) => (answers[t.dataset.answer] = t.value.trim()));
+      if (Object.values(answers).some((a) => !a)) return toast("Answer every question first.", true);
+      return sendAnswers(answers, "Answer sent. Work continues.");
+    }
+    case "escalate": {
+      const card = el.closest("[data-question]");
+      const id = card.dataset.question;
+      const guidance = card.querySelector("textarea").value.trim();
+      const choice = el.dataset.choice;
+      if (choice === "guide" && !guidance) return toast("Write the guidance first, or choose Try again.", true);
+      if (choice === "abort" && !confirm("Stop this session? Remaining tasks will not run.")) return;
+      const value = { guide: guidance, retry: "retry", skip: "skip", abort: "abort" }[choice];
+      return sendAnswers({ [id]: value }, { guide: "Guidance sent", retry: "Trying again", skip: "Task skipped", abort: "Session stopped" }[choice]);
+    }
+    case "save-rules": {
+      const scope = state.rules.scope;
+      const saved = await attempt(() => api("PUT", "/api/rules", { scope, path: scope === "project" ? state.route.path : null, executor_context: state.rules.data.executor_context, body: $("#rules-body").value }), "Rules saved");
+      if (saved) state.rules.data = saved;
+      return;
+    }
+    case "preview-planner": {
+      const q = state.rules.scope === "project" ? `?path=${encodeURIComponent(state.route.path)}` : "";
+      const data = await attempt(() => api("GET", `/api/preview${q}`));
+      if (data) modal(`<div class="modal-head"><h3>DeepSeek's planning prompt, as sent</h3><button class="btn quiet small" data-action="close-modal" aria-label="Close">✕</button></div>
+        <div class="modal-body"><pre class="block" style="max-height:none">${esc(data.system_prompt)}</pre></div>`, true);
+      return;
+    }
+    case "save-prompt": {
+      const scope = state.rules.scope;
+      const saved = await attempt(() => api("PUT", "/api/prompt", { name: state.rules.promptName, scope, path: scope === "project" ? state.route.path : null, content: $("#prompt-content").value }), "Prompt saved");
+      if (saved) { state.rules.dirty = false; await loadRules(); }
+      return;
+    }
+    case "reset-prompt": {
+      if (!confirm("Delete your version and go back to the default prompt?")) return;
+      const scope = state.rules.scope;
+      const path = scope === "project" ? `&path=${encodeURIComponent(state.route.path)}` : "";
+      const reset = await attempt(() => api("DELETE", `/api/prompt?name=${state.rules.promptName}&scope=${scope}${path}`), "Back to the default prompt");
+      if (reset) { state.rules.dirty = false; await loadRules(); }
+      return;
+    }
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && $("#overlay").innerHTML) closeModal();
+  const row = event.target.closest?.("[data-open-session]");
+  if (row && event.key === "Enter") row.click();
+  if (event.target.id === "request" && event.key === "Enter" && (event.metaKey || event.ctrlKey)) $("#composer").requestSubmit();
+});
+document.addEventListener("input", (event) => {
+  if (event.target.id === "prompt-content") { state.rules.dirty = true; const d = $("#prompt-dirty"); if (d) d.textContent = "Unsaved changes"; }
+});
+
+document.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (event.target.id === "composer") {
+    const request = $("#request").value.trim();
+    if (!request) { $("#request").focus(); return toast("Describe what should be built first.", true); }
+    const started = await attempt(() => api("POST", "/api/runs", { path: state.route.path, request, approve_plan: $("#approve").checked }), "Started. DeepSeek is planning.");
+    if (!started) return;
+    state.sessionId = started.session_id;
+    state.project.busy = true;
+    state.details = {};
+    state.expanded.clear();
+    renderWork();
+    $("#decision").dataset.key = "";
+    refreshOverview();
+    pollSession();
+  }
+  if (event.target.id === "settings-form") {
+    const values = {};
+    const original = Object.fromEntries(state.settings.fields.map((f) => [f.key, f]));
+    event.target.querySelectorAll("[data-key]").forEach((input) => {
+      const field = original[input.dataset.key];
+      const value = input.dataset.kind === "bool" ? input.checked : input.value.trim();
+      const before = field.kind === "bool" ? !!field.value : String(field.value ?? "");
+      if (field.kind === "secret" ? value !== "" : value !== before) values[input.dataset.key] = value;
+    });
+    if (!Object.keys(values).length) return toast("Nothing changed.");
+    const saved = await attempt(() => api("PUT", "/api/settings", { values }), "Settings saved");
+    if (saved) { await refreshOverview(); loadSettings(); }
+  }
+});
+
+async function decide(body, message) {
+  const done = await attempt(() => api("POST", `/api/sessions/${state.sessionId}/plan`, body), message);
+  if (done) { $("#decision").innerHTML = ""; $("#decision").dataset.key = "sent"; state.project.busy = true; pollSession(); }
+}
+async function sendAnswers(answers, message) {
+  const done = await attempt(() => api("POST", `/api/sessions/${state.sessionId}/answers`, { answers }), message);
+  if (done) { $("#decision").innerHTML = ""; $("#decision").dataset.key = "sent"; state.project.busy = true; pollSession(); }
+}
+
+window.addEventListener("beforeunload", (event) => { if (state.rules.dirty) { event.preventDefault(); event.returnValue = ""; } });
+
+(async function init() {
+  await refreshOverview();
+  await onRoute();
+  setInterval(refreshOverview, 8000);
+})();
+</script>
+</body>
+</html>

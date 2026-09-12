@@ -1,0 +1,5 @@
+$task_block
+
+These commands must exit with code 0 when you are done:
+$verify_commands
+$feedback

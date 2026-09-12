@@ -1,0 +1,3 @@
+Work non-interactively: never ask questions or wait for confirmation; make reasonable assumptions.
+Work only inside the current working directory. Do not change git history. Do not leave long-running processes running.
+Finish with a short report of what you changed and how you verified it.

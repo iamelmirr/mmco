@@ -1,0 +1,10 @@
+A reviewer checked your work on this task and it is not complete yet.
+
+# Reviewer feedback
+$feedback
+
+# Verification results from your last attempt
+$verify_report
+
+Your earlier changes are still on disk. Fix the issues in place, run the verification commands again, and finish
+with a short report.

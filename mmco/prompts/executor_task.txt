@@ -1,0 +1,17 @@
+# Overall goal
+$goal
+
+# Plan (you are working on the step marked →)
+$plan_overview
+
+# Your task
+$task_block
+
+# Verification
+When you finish, the orchestrator runs these commands from the project root. Each must exit with code 0:
+$verify_commands
+Run them yourself before finishing and fix any failures.
+$clarifications$feedback
+# Scope
+Implement only this task. Later steps of the plan are done separately: do not implement them, but do not break
+the interface contracts they rely on.

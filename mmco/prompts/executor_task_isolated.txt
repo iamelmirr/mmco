@@ -1,0 +1,10 @@
+# Task
+$task_block
+
+# Verification
+When you finish, these commands are run from the project root. Each must exit with code 0:
+$verify_commands
+Run them yourself before finishing and fix any failures.
+$feedback
+# Scope
+Do exactly this task and nothing beyond it. Do not change code that the task does not require you to change.

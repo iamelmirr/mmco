@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mmco"
+version = "0.1.0"
+description = "Multi-Model Coding Orchestrator: a planner LLM (via OpenRouter) drives Claude Code"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "openai>=1.40",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "typer>=0.12",
+  "rich>=13",
+  "loguru>=0.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+mmco = "mmco.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mmco"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["e2e: real OpenRouter + Claude Code calls (opt-in with MMCO_E2E=1)"]

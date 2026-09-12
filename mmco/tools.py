@@ -33,12 +33,9 @@ class Toolbox:
         if raw.is_absolute():
             raise ToolError(f"absolute paths are not allowed: {path}")
         resolved = (self.root / raw).resolve()
-        if resolved != self.root and not resolved.is_relative_to(self.root):
+        if not resolved.is_relative_to(self.root):
             raise ToolError(f"path escapes the sandbox: {path}")
         return resolved
-
-    def _relpath(self, target: Path) -> str:
-        return target.relative_to(self.root).as_posix()
 
     # -- read ------------------------------------------------------------
 
@@ -64,6 +61,9 @@ class Toolbox:
             for filename in sorted(filenames):
                 file_path = current / filename
                 try:
+                    # Skip symlinks (or anything) that resolves outside the sandbox.
+                    if not file_path.resolve().is_relative_to(self.root):
+                        continue
                     if file_path.stat().st_size > self.max_bytes:
                         continue
                     text = file_path.read_text(encoding="utf-8")
@@ -101,9 +101,11 @@ class Toolbox:
         if not self.allow_write:
             raise ToolError("write access is disabled (read-only mode)")
         target = self._resolve(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
         text = content.rstrip("\n") + "\n"
         data = text.encode("utf-8")
+        if len(data) > self.max_bytes:
+            raise ToolError(f"content too large ({len(data)} bytes > {self.max_bytes}): {path}")
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
         return f"wrote {path} ({len(data)} bytes)"
 
@@ -128,6 +130,8 @@ class Toolbox:
         updated = text.replace(old, new)
         updated = updated.rstrip("\n") + "\n"
         data = updated.encode("utf-8")
+        if len(data) > self.max_bytes:
+            raise ToolError(f"content too large ({len(data)} bytes > {self.max_bytes}): {path}")
         target.write_text(updated, encoding="utf-8")
         return f"edited {path} ({len(data)} bytes)"
 
@@ -146,10 +150,10 @@ class Toolbox:
             return f"ERROR: unknown tool {name!r}"
         try:
             return method(arguments)
-        except ToolError as e:
-            return f"ERROR: {e}"
         except KeyError as e:
             return f"ERROR: missing argument {e} for tool {name!r}"
+        except (ToolError, TypeError, ValueError) as e:
+            return f"ERROR: {e}"
 
     # -- schemas ---------------------------------------------------------
 

@@ -50,6 +50,45 @@ def test_read_only_mode_blocks_writes(tmp_path):
         box.write_file("x.py", "1")
 
 
+def test_read_only_mode_blocks_edits(tmp_path):
+    (tmp_path / "x.py").write_text("a\n")
+    box = Toolbox(tmp_path, allow_write=False)
+    with pytest.raises(ToolError):
+        box.edit_file("x.py", "a", "b")
+
+
+def test_search_does_not_follow_symlink_outside_root(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("TOPSECRET value")
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "link.txt").symlink_to(outside / "secret.txt")
+    box = Toolbox(root)
+    # A hit would render as "link.txt:1: ...", so the symlinked file's path
+    # must not appear in the results.
+    assert "link.txt" not in box.search("TOPSECRET")
+
+
+def test_dispatch_handles_bad_arg_types(box):
+    # "line" matches a.py, so the bad max_results type is exercised in the cap check.
+    result = box.dispatch("search", {"query": "line", "max_results": "5"})
+    assert isinstance(result, str) and result.startswith("ERROR:")
+
+
+def test_write_too_large_raises(tmp_path):
+    box = Toolbox(tmp_path, max_bytes=10)
+    with pytest.raises(ToolError):
+        box.write_file("big.py", "x" * 100)
+
+
+def test_edit_too_large_raises(tmp_path):
+    (tmp_path / "big.py").write_text("small\n")
+    box = Toolbox(tmp_path, max_bytes=10)
+    with pytest.raises(ToolError):
+        box.edit_file("big.py", "small", "x" * 100)
+
+
 def test_openai_schemas_shape():
     schemas = Toolbox.schemas(allow_write=True)
     names = {s["function"]["name"] for s in schemas}

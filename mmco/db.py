@@ -312,14 +312,19 @@ class Database:
         return self._task(row)
 
     def find_task(self, session_id: str, id_or_prefix: str) -> Task:
+        # An all-digits reference is a 1-based task number (as shown in the UI/CLI). Resolve it
+        # before UUID-prefix matching, so a task whose UUID happens to start with that digit
+        # cannot shadow the numbered task.
+        if id_or_prefix.isdigit():
+            numbered = self.conn.execute(
+                "SELECT * FROM tasks WHERE session_id = ? AND order_index = ?", (session_id, int(id_or_prefix) - 1)
+            ).fetchall()
+            if numbered:
+                return self._task(numbered[0])
         rows = self.conn.execute(
             "SELECT * FROM tasks WHERE session_id = ? AND (id = ? OR id LIKE ?)",
             (session_id, id_or_prefix, f"{id_or_prefix}%"),
         ).fetchall()
-        if not rows and id_or_prefix.isdigit():
-            rows = self.conn.execute(
-                "SELECT * FROM tasks WHERE session_id = ? AND order_index = ?", (session_id, int(id_or_prefix) - 1)
-            ).fetchall()
         if not rows:
             raise NotFoundError(f"no task matches '{id_or_prefix}' in session {session_id}")
         if len(rows) > 1:

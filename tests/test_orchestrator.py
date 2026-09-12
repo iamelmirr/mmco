@@ -649,3 +649,14 @@ def test_dependency_folders_and_secrets_are_never_committed_or_deleted(settings,
     first = db.list_executions(session_id=session.id)[0]
     assert ".venv" not in first.diff_stat and "app.py" in first.diff_stat
     assert (project / ".venv/bin/python").exists()  # the rollback before the second attempt kept it
+
+
+def test_find_task_number_not_shadowed_by_uuid_prefix(db, tmp_path):
+    """A task number resolves to its order_index even if another task's UUID starts with that digit."""
+    session = db.create_session("x", str(tmp_path))
+    t1, t2 = db.insert_tasks(session.id, [TaskSpec(description="first"), TaskSpec(description="second")])
+    # Force the first task's id to start with "2" so a "2%" prefix match would shadow task number 2.
+    db.conn.execute("UPDATE tasks SET id = ? WHERE id = ?", ("2" + t1.id[1:], t1.id))
+    db.conn.commit()
+    found = db.find_task(session.id, "2")
+    assert found.order_index == 1 and found.description == "second"

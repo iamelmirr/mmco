@@ -13,6 +13,7 @@ TaskStatus = Literal["pending", "in_progress", "done", "failed", "blocked", "ski
 NextAction = Literal["continue", "retry", "reformulate", "add_task", "clarify", "fail"]
 PlannerPurpose = Literal["plan", "eval", "reformulate", "clarify", "review"]
 ClarificationKind = Literal["question", "escalation"]
+AgentName = Literal["claude", "planner"]
 
 
 def new_id() -> str:
@@ -70,6 +71,7 @@ class Task(TaskSpec):
     attempts: int = 0
     cycle_attempts: int = 0  # attempts since the last reformulation
     reformulations: int = 0
+    executor: AgentName = "claude"
     prompt_override: str | None = None
     last_feedback: str | None = None
     resume_claude_session_id: str | None = None
@@ -126,6 +128,7 @@ class Execution(BaseModel):
     task_id: str
     session_id: str
     attempt: int
+    agent: AgentName = "claude"
     result: ExecutionResult
     refusal_detected: bool = False
     diff_stat: str = ""

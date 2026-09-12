@@ -129,6 +129,10 @@ MIGRATIONS: list[str] = [
     ALTER TABLE executions ADD COLUMN regression_results TEXT NOT NULL DEFAULT '[]';
     CREATE INDEX idx_sessions_project ON sessions(project_dir, created_at);
     """,
+    """
+    ALTER TABLE executions ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude';
+    ALTER TABLE tasks ADD COLUMN executor TEXT NOT NULL DEFAULT 'claude';
+    """,
 ]
 
 _TASK_JSON_FIELDS = ("acceptance_criteria", "files_involved", "interface_contracts", "verify_commands")
@@ -149,6 +153,7 @@ _TASK_UPDATABLE = (
     "resume_claude_session_id",
     "start_commit",
     "end_commit",
+    "executor",
 )
 
 
@@ -374,16 +379,17 @@ class Database:
         r = execution.result
         with self.conn:
             self.conn.execute(
-                """INSERT INTO executions (id, task_id, session_id, attempt, prompt_sent, claude_output, result_text,
+                """INSERT INTO executions (id, task_id, session_id, attempt, agent, prompt_sent, claude_output, result_text,
                    stderr, exit_code, duration_ms, timed_out, is_error, subtype, stop_reason, refusal_detected,
                    permission_denials, claude_session_id, cost_usd, num_turns, diff_stat, diff, verify_results,
                    regression_results, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     execution.id,
                     execution.task_id,
                     execution.session_id,
                     execution.attempt,
+                    execution.agent,
                     r.prompt,
                     _dumps(r.raw_output) if r.raw_output is not None else None,
                     r.result_text,
@@ -463,6 +469,7 @@ class Database:
             task_id=d["task_id"],
             session_id=d["session_id"],
             attempt=d["attempt"],
+            agent=d["agent"],
             result=result,
             refusal_detected=bool(d["refusal_detected"]),
             diff_stat=d["diff_stat"],

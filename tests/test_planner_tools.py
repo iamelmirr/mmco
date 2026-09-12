@@ -1,6 +1,13 @@
 import json
 from types import SimpleNamespace
 
+import openai
+
+try:  # openai>=3 ships its HTTP client as httpx2
+    import httpx2 as httpx
+except ImportError:
+    import httpx
+
 from mmco.planner import Planner
 from mmco.models import Session
 
@@ -24,6 +31,8 @@ class ScriptedClient:
     def _create(self, **kwargs):
         self.sent.append(kwargs)
         item = self.turns.pop(0)
+        if isinstance(item, Exception):
+            raise item
         if isinstance(item, list):
             msg = SimpleNamespace(content=None, tool_calls=item)
         else:
@@ -56,6 +65,26 @@ def test_tool_loop_has_a_cap(settings, db, tmp_path):
     planner = Planner(settings, db, client=client, sleep=lambda _: None)
     plan = planner.plan(session, "", [], read_tools=True)
     assert plan is not None
+
+
+def test_transient_error_in_tool_loop_is_retried(settings, db, tmp_path):
+    (tmp_path / "app.py").write_text("def hello(): return 'hi'\n")
+    session = db.create_session("x", str(tmp_path))
+    error = openai.APIConnectionError(request=httpx.Request("POST", "https://openrouter.ai"))
+    client = ScriptedClient(
+        [
+            error,
+            [tool_call("c1", "read_file", {"path": "app.py"})],
+            json.dumps({"tasks": [{"description": "task using hello()"}]}),
+        ]
+    )
+    planner = Planner(settings, db, client=client, sleep=lambda _: None)
+    plan = planner.plan(session, "", [], read_tools=True)
+    assert plan.tasks[0].description
+    # Three completions happened: the transient failure, the tool call, and the final answer.
+    assert len(client.sent) == 3
+    calls = db.list_planner_calls(session.id)
+    assert calls[0]["error"] and calls[-1]["response_text"]
 
 
 def test_read_tools_pass_read_only_schemas(settings, db, tmp_path):

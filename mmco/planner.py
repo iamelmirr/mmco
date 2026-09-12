@@ -367,36 +367,57 @@ class Planner:
         if json_mode and s.planner_json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         message = self._create_and_persist(session.id, purpose, kwargs, task_id)
-        return message.content or ""
+        content = message.content or ""
+        # Fail fast on a genuinely empty answer: returning "" would make extract_json fail and rerun
+        # this whole tool loop up to planner_max_retries times. If the model still tried to call tools,
+        # hand back its (empty) text so the JSON-retry loop can prompt it once more for a plain answer.
+        if not content.strip() and not getattr(message, "tool_calls", None):
+            raise PlannerError(f"planner '{purpose}' did not answer after exhausting its tool budget")
+        return content
 
     def _create_and_persist(
         self, session_id: str, purpose: PlannerPurpose, kwargs: dict[str, Any], task_id: str | None
     ) -> Any:
-        """One completion (single attempt), persisted like ``_request``; fatal failures raise PlannerError."""
+        """One completion with backoff on transient API errors, persisted like ``_request``.
+
+        Fatal errors (bad key / model / request) raise PlannerError immediately; transient ones
+        (rate limit, timeout, connection, server) are retried up to ``planner_max_retries``.
+        """
         s = self.settings
-        started = time.monotonic()
-        try:
-            response = self.client.chat.completions.create(**kwargs)
-            message = response.choices[0].message
-        except Exception as exc:  # noqa: BLE001 - logged, then surfaced as PlannerError
+        delay = 2.0
+        for attempt in range(1, s.planner_max_retries + 1):
+            started = time.monotonic()
+            try:
+                response = self.client.chat.completions.create(**kwargs)
+                message = response.choices[0].message
+            except Exception as exc:  # noqa: BLE001 - every failure is logged; fatal ones re-raised below
+                elapsed = int((time.monotonic() - started) * 1000)
+                self.db.add_planner_call(
+                    session_id, purpose, s.planner_model, kwargs, None, elapsed, task_id, error=repr(exc)
+                )
+                if isinstance(exc, _FATAL_API_ERRORS):
+                    hint = ""
+                    if isinstance(exc, openai.BadRequestError) and "response_format" in kwargs:
+                        hint = " (if the model does not support JSON mode, set MMCO_PLANNER_JSON_MODE=false)"
+                    raise PlannerError(f"planner API call failed: {exc}{hint}") from exc
+                if attempt == s.planner_max_retries:
+                    raise PlannerError(f"planner API call failed after {attempt} attempts: {exc}") from exc
+                logger.warning("planner {} call failed ({}); retrying in {:.0f}s", purpose, exc, delay)
+                self._sleep(delay)
+                delay *= 2
+                continue
+
             elapsed = int((time.monotonic() - started) * 1000)
+            content = message.content or ""
+            cost = _usage_cost(response)
             self.db.add_planner_call(
-                session_id, purpose, s.planner_model, kwargs, None, elapsed, task_id, error=repr(exc)
+                session_id, purpose, s.planner_model, kwargs, content, elapsed, task_id, cost_usd=cost
             )
-            hint = ""
-            if isinstance(exc, openai.BadRequestError) and "response_format" in kwargs:
-                hint = " (if the model does not support JSON mode, set MMCO_PLANNER_JSON_MODE=false)"
-            raise PlannerError(f"planner API call failed: {exc}{hint}") from exc
-        elapsed = int((time.monotonic() - started) * 1000)
-        content = message.content or ""
-        cost = _usage_cost(response)
-        self.db.add_planner_call(
-            session_id, purpose, s.planner_model, kwargs, content, elapsed, task_id, cost_usd=cost
-        )
-        logger.bind(event="planner_call", purpose=purpose, request=kwargs["messages"], response=content).debug(
-            "planner {} call finished in {:.1f}s", purpose, elapsed / 1000
-        )
-        return message
+            logger.bind(event="planner_call", purpose=purpose, request=kwargs["messages"], response=content).debug(
+                "planner {} call finished in {:.1f}s", purpose, elapsed / 1000
+            )
+            return message
+        raise PlannerError("unreachable")  # pragma: no cover
 
     def _request(
         self,

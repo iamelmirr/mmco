@@ -17,6 +17,7 @@ from .models import (
     ClarifyResponse,
     EvalResult,
     Execution,
+    ExecutorChoice,
     PlannerPurpose,
     PlanResponse,
     ReviewResult,
@@ -24,6 +25,7 @@ from .models import (
     Task,
     VerifyResult,
 )
+from .projectmap import build_map
 from .rules import load_rules, prompt_dirs
 from .tools import Toolbox
 from .utils import MMCOError, extract_json, load_prompt, truncate
@@ -221,6 +223,36 @@ class Planner:
         )
         questions = [q.strip() for q in response.questions if q.strip()][:5]
         return questions or [f"The pipeline is blocked: {blocker}. How should it proceed?"]
+
+    def choose_executor(self, session: Session, task: Task, toolbox: "Toolbox") -> tuple[str, str]:
+        """Decide whether the planner or Claude should execute ``task``.
+
+        Returns ``(executor, reason)`` with executor "planner" or "claude" (anything
+        unexpected is normalised to "claude").
+        """
+        payload = {
+            "task": _task_payload(task),
+            "project_map": build_map(session.project_dir),
+        }
+        choice = self._call_json_with_tools(
+            session, "choose_executor", "planner_choose_executor.txt", payload, ExecutorChoice,
+            toolbox, allow_write=False, task_id=task.id,
+        )
+        return choice.executor, choice.reason
+
+    def execute_task(self, session: Session, task: Task, toolbox: "Toolbox") -> str:
+        """Execute ``task`` directly via the write-enabled tool loop; return a short report."""
+        payload = {
+            "task": _task_payload(task),
+            "project_map": build_map(session.project_dir),
+        }
+        messages = self._messages(session, "planner_execute.txt", payload)
+        report = self._request_with_tools(
+            session, "execute", messages, toolbox, allow_write=True, task_id=task.id, json_mode=False,
+        ).strip()
+        if not report:
+            raise PlannerError("planner returned an empty execution report")
+        return report
 
     # ---- plumbing -------------------------------------------------------
 

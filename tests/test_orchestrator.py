@@ -57,6 +57,16 @@ class FakePlanner:
         self.evaluated = []
         self.plan_calls = []
         self.review_calls = []
+        self.executor_choice = ("claude", "")
+        self.execute_impl = None
+
+    def choose_executor(self, session, task, toolbox):
+        return self.executor_choice
+
+    def execute_task(self, session, task, toolbox):
+        # self.execute_impl(root, prompt) writes files and returns a report string
+        import pathlib
+        return self.execute_impl(pathlib.Path(session.project_dir), task.description) if self.execute_impl else "done"
 
     def plan(self, session, listing, clarifications):
         self.plan_calls.append(clarifications)
@@ -649,6 +659,59 @@ def test_dependency_folders_and_secrets_are_never_committed_or_deleted(settings,
     first = db.list_executions(session_id=session.id)[0]
     assert ".venv" not in first.diff_stat and "app.py" in first.diff_stat
     assert (project / ".venv/bin/python").exists()  # the rollback before the second attempt kept it
+
+
+# ---- planner as executor ------------------------------------------------------
+
+
+def test_planner_executes_task_itself(settings, db, project):
+    planner = FakePlanner(PlanResponse(tasks=[spec(0, "docs")]), [ok()])
+    planner.executor_choice = ("planner", "just docs")
+    planner.execute_impl = lambda root, prompt: (root / "README.md").write_text("# Docs\n") or "wrote README"
+    executor = FakeExecutor([])  # Claude must NOT be called
+    session = build(settings, db, planner, executor).start(project, "x")
+    assert session.status == "done"
+    assert (project / "README.md").exists()
+    assert not executor.calls
+    execs = db.list_executions(session_id=session.id)
+    assert execs[0].agent == "planner"
+    assert db.list_tasks(session.id)[0].executor == "planner"
+
+
+def test_planner_work_passes_through_checks(settings, db, project):
+    # planner executor, first attempt writes nothing (check fails) -> retry; then claude fixes?
+    # Keep it simple: planner writes the flag on its first try and the check passes.
+    planner = FakePlanner(PlanResponse(tasks=[spec(0, "docs", ["test -f README.md"])]), [ok()])
+    planner.executor_choice = ("planner", "docs")
+    planner.execute_impl = lambda root, prompt: (root / "README.md").write_text("# Docs\n") or "wrote"
+    session = build(settings, db, FakePlanner and planner, FakeExecutor([])).start(project, "x")
+    assert session.status == "done"
+    assert db.list_executions(session_id=session.id)[0].verify_results[0].passed
+
+
+def test_planner_failing_check_is_caught(settings, db, project):
+    # planner claims done but writes nothing; verify fails; guard downgrades to retry
+    planner = FakePlanner(PlanResponse(tasks=[spec(0, "docs", ["test -f README.md"])]), [ok(), ok()])
+    planner.executor_choice = ("planner", "docs")
+    calls = {"n": 0}
+    def impl(root, prompt):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            (root / "README.md").write_text("# Docs\n")
+        return "attempt"
+    planner.execute_impl = impl
+    session = build(settings, db, planner, FakeExecutor([])).start(project, "x")
+    assert session.status == "done"
+    assert calls["n"] == 2  # first attempt failed the check, retried
+
+
+def test_claude_still_used_when_chosen(settings, db, project):
+    planner = FakePlanner(PlanResponse(tasks=[spec(0, "code")]), [ok()])
+    planner.executor_choice = ("claude", "real code")
+    executor = FakeExecutor([writes({"app.py": "1"})])
+    session = build(settings, db, planner, executor).start(project, "x")
+    assert session.status == "done" and executor.calls
+    assert db.list_executions(session_id=session.id)[0].agent == "claude"
 
 
 def test_find_task_number_not_shadowed_by_uuid_prefix(db, tmp_path):

@@ -21,6 +21,7 @@ from .executor import classify_failure
 from .models import EvalResult, Execution, ExecutionResult, Session, SessionStatus, Task, TaskSpec, VerifyResult
 from .planner import PlannerError
 from .rules import load_rules, prompt_dirs
+from .tools import Toolbox
 from .utils import MMCOError, add_session_log, bullets, dump_crash, load_prompt, render, truncate
 from .workspace import Workspace, run_verify_commands
 
@@ -348,26 +349,36 @@ class Orchestrator:
 
     def _execute(self, session: Session, task: Task, tasks: list[Task], workspace: Workspace) -> Execution:
         s = self.settings
-        context = self._executor_context(session)
-        resume_id = task.resume_claude_session_id
-        if resume_id and task.last_feedback:
-            prompt = self._retry_prompt(session, task)
-        else:
-            resume_id = None
-            prompt = self._task_prompt(session, task, tasks, context)
-            if task.needs_continuity:
-                resume_id = self._previous_claude_session(tasks, task)
-        system_prompt = "executor_system_minimal.txt" if context == "minimal" else "executor_system.txt"
-
         position = next((i for i, t in enumerate(tasks, 1) if t.id == task.id), "?")
-        logger.info(
-            "▶ task {}/{} '{}' (attempt {}{}, context: {})",
-            position, len(tasks), task.label, task.attempts + 1, ", resumed session" if resume_id else "", context,
-        )
-        result = self._run_claude(prompt, session.project_dir, resume_id, system_prompt)
+        # A Claude retry (--resume with feedback) must stay with Claude; never re-ask who should run it.
+        forced_claude = bool(task.resume_claude_session_id and task.last_feedback)
+
+        executor = "claude"
+        if s.allow_planner_executor and not forced_claude:
+            executor, reason = self.planner.choose_executor(
+                session, task, Toolbox(session.project_dir, allow_write=False)
+            )
+            logger.info("executor for '{}': {} ({})", task.label, executor, reason or "no reason given")
+        task.executor = executor
+        self.db.save_task(task)
+
+        if executor == "planner":
+            logger.info(
+                "▶ task {}/{} '{}' (attempt {}, executor: DeepSeek)",
+                position, len(tasks), task.label, task.attempts + 1,
+            )
+            report = self.planner.execute_task(session, task, Toolbox(session.project_dir, allow_write=True))
+            result = ExecutionResult(
+                prompt=self._task_block(task), result_text=str(report), cost_usd=None, claude_session_id=None
+            )
+            agent: str = "planner"
+        else:
+            result, agent = self._execute_with_claude(session, task, tasks, position)
+
         diff_stat, diff = workspace.diff_since(task.start_commit)
         verify: list[VerifyResult] = []
         regressions: list[VerifyResult] = []
+        # Planner runs never "time out"; a timed-out Claude run leaves the tree in an unknown state.
         if not result.timed_out:
             verify = run_verify_commands(task.verify_commands, session.project_dir, s.verify_timeout_seconds)
             if s.regression_checks:
@@ -380,9 +391,10 @@ class Orchestrator:
             task_id=task.id,
             session_id=session.id,
             attempt=task.attempts,
+            agent=agent,
             result=result,
-            # Only trust refusal phrasing when the agent also changed nothing.
-            refusal_detected=result.refusal_suspected and not diff.strip(),
+            # Only trust refusal phrasing for Claude, and only when it also changed nothing.
+            refusal_detected=agent == "claude" and result.refusal_suspected and not diff.strip(),
             diff_stat=diff_stat,
             diff=truncate(diff, s.max_diff_chars),
             verify_results=verify,
@@ -393,6 +405,26 @@ class Orchestrator:
         if execution.refusal_detected:
             logger.warning("refusal detected in executor output")
         return execution
+
+    def _execute_with_claude(
+        self, session: Session, task: Task, tasks: list[Task], position: Any
+    ) -> tuple[ExecutionResult, str]:
+        context = self._executor_context(session)
+        resume_id = task.resume_claude_session_id
+        if resume_id and task.last_feedback:
+            prompt = self._retry_prompt(session, task)
+        else:
+            resume_id = None
+            prompt = self._task_prompt(session, task, tasks, context)
+            if task.needs_continuity:
+                resume_id = self._previous_claude_session(tasks, task)
+        system_prompt = "executor_system_minimal.txt" if context == "minimal" else "executor_system.txt"
+        logger.info(
+            "▶ task {}/{} '{}' (attempt {}{}, context: {})",
+            position, len(tasks), task.label, task.attempts + 1, ", resumed session" if resume_id else "", context,
+        )
+        result = self._run_claude(prompt, session.project_dir, resume_id, system_prompt)
+        return result, "claude"
 
     def _run_claude(
         self, prompt: str, project_dir: str, resume_id: str | None, system_prompt: str = "executor_system.txt"

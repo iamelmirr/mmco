@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     # Default for how much Claude is told; a rules.md front matter overrides it (full | task | minimal).
     executor_context: str = "full"
     claude_max_budget_usd_per_task: float | None = None
+    # Let the planner (DeepSeek) execute suitable tasks itself instead of always dispatching Claude.
+    allow_planner_executor: bool = True
 
     max_attempts_per_task: int = 3
     max_reformulations_per_task: int = 2

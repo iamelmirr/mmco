@@ -796,6 +796,36 @@ def test_forced_claude_retry_does_not_reconsult_choose_executor(settings, db, pr
     assert planner.choose_calls == 1
 
 
+def test_take_over_finishes_a_claude_task(settings, db, project):
+    planner = FakePlanner(PlanResponse(tasks=[spec(0, "feature", ["test -f done.txt"])]),
+                          [verdict("take_over", "claude almost did it"), ok()])
+    planner.executor_choice = ("claude", "")
+
+    def impl(root, prompt):
+        (root / "done.txt").write_text("1")
+        return "finished it"
+    planner.execute_impl = impl
+    executor = FakeExecutor([writes({"partial.py": "x"})])  # Claude's attempt (no done.txt -> check fails first)
+    session = build(settings, db, planner, executor).start(project, "x")
+    assert session.status == "done"
+    agents = [e.agent for e in db.list_executions(session_id=session.id)]
+    assert agents == ["claude", "planner"]
+    assert db.list_tasks(session.id)[0].handoffs == 1
+
+
+def test_handoff_counter_escalates(settings, db, project):
+    settings.max_handoffs_per_task = 2
+    settings.escalate_to_user = False  # so exhaustion fails instead of asking
+    planner = FakePlanner(PlanResponse(tasks=[spec(0, "feature", ["test -f never.txt"])]),
+                          [verdict("take_over", "1"), verdict("take_over", "2"), verdict("take_over", "3")])
+    planner.executor_choice = ("claude", "")
+    planner.execute_impl = lambda root, prompt: "did not create the file"
+    executor = FakeExecutor([writes({"x.py": "1"})])
+    session = build(settings, db, planner, executor).start(project, "x")
+    assert session.status == "failed"
+    assert db.list_tasks(session.id)[0].handoffs <= settings.max_handoffs_per_task + 1
+
+
 def test_find_task_number_not_shadowed_by_uuid_prefix(db, tmp_path):
     """A task number resolves to its order_index even if another task's UUID starts with that digit."""
     session = db.create_session("x", str(tmp_path))

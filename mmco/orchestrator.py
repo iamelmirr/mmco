@@ -326,6 +326,13 @@ class Orchestrator:
         if execution is None:
             execution = self._execute(session, task, tasks, workspace)
 
+        self._evaluate_and_dispatch(session, task, execution, workspace)
+
+    def _evaluate_and_dispatch(
+        self, session: Session, task: Task, execution: Execution, workspace: Workspace
+    ) -> None:
+        """Judge one execution, apply the hard guards, persist the verdict, and act on it."""
+        s = self.settings
         logger.info("evaluating attempt...")
         evaluation = self.planner.evaluate(
             session, task, execution, self.db.list_evaluations(task_id=task.id),
@@ -349,7 +356,6 @@ class Orchestrator:
 
     def _execute(self, session: Session, task: Task, tasks: list[Task], workspace: Workspace) -> Execution:
         s = self.settings
-        position = next((i for i, t in enumerate(tasks, 1) if t.id == task.id), "?")
         # A Claude retry (--resume with feedback) must stay with Claude; never re-ask who should run it.
         forced_claude = bool(task.resume_claude_session_id and task.last_feedback)
 
@@ -359,6 +365,16 @@ class Orchestrator:
                 session, task, Toolbox(session.project_dir, allow_write=False)
             )
             logger.info("executor for '{}': {} ({})", task.label, executor, reason or "no reason given")
+        return self._execute_as(session, task, tasks, workspace, executor)
+
+    def _execute_as(
+        self, session: Session, task: Task, tasks: list[Task], workspace: Workspace, executor: str
+    ) -> Execution:
+        """Run this task with a specific executor and put the result through the shared verify/regression tail."""
+        s = self.settings
+        position = next((i for i, t in enumerate(tasks, 1) if t.id == task.id), "?")
+        # A Claude retry (--resume with feedback) must stay on disk; a planner take_over builds on it too.
+        forced_claude = bool(task.resume_claude_session_id and task.last_feedback)
         task.executor = executor
         self.db.save_task(task)
 
@@ -527,6 +543,8 @@ class Orchestrator:
                 self.db.save_task(task)
                 logger.info("added {} prerequisite task(s); this task runs again after them",
                             len(evaluation.new_tasks))
+        elif action == "take_over":
+            self._take_over(session, task, workspace)
         elif action == "retry":
             self._retry(session, task, execution, evaluation, workspace)
         elif action == "reformulate":
@@ -551,6 +569,21 @@ class Orchestrator:
         task.resume_claude_session_id = None
         self.db.save_task(task)
         logger.success("✔ task '{}' done", task.label)
+
+    def _take_over(self, session: Session, task: Task, workspace: Workspace) -> None:
+        """The planner finishes the task itself, building on the coding agent's work.
+
+        A per-task hand-off counter stops the two executors from ping-ponging forever.
+        """
+        task.handoffs += 1
+        self.db.save_task(task)
+        if task.handoffs > self.settings.max_handoffs_per_task:
+            self._fail(session, task, "executors kept handing the task back and forth", workspace)
+            return
+        logger.info("planner is taking over '{}' to finish it (hand-off {})", task.label, task.handoffs)
+        tasks = self.db.list_tasks(session.id)
+        execution = self._execute_as(session, task, tasks, workspace, "planner")
+        self._evaluate_and_dispatch(session, task, execution, workspace)
 
     def _retry(
         self, session: Session, task: Task, execution: Execution, evaluation: EvalResult, workspace: Workspace

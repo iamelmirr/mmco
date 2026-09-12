@@ -31,6 +31,10 @@ DECISION RULES for next_action
   description, acceptance_criteria, files_involved, interface_contracts,
   verify_commands). If satisfied is false they run BEFORE this task is retried;
   if satisfied is true they run right after it.
+- "take_over": use take_over when the coding agent got most of the way and you (the
+  planner) can finish the small remainder yourself. You will run the task next as the
+  executor, building on the work already on disk, instead of handing it back to the
+  coding agent. Reserve this for a small, well-defined remainder; it is bounded per task.
 - "clarify": only a human can resolve the blocker (missing credentials, a product
   decision with no reasonable default). Explain the blocker in reason.
 - "fail": the task is impossible, or continuing is pointless.

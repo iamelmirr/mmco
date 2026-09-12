@@ -133,6 +133,9 @@ MIGRATIONS: list[str] = [
     ALTER TABLE executions ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude';
     ALTER TABLE tasks ADD COLUMN executor TEXT NOT NULL DEFAULT 'claude';
     """,
+    """
+    ALTER TABLE tasks ADD COLUMN handoffs INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 _TASK_JSON_FIELDS = ("acceptance_criteria", "files_involved", "interface_contracts", "verify_commands")
@@ -148,6 +151,7 @@ _TASK_UPDATABLE = (
     "attempts",
     "cycle_attempts",
     "reformulations",
+    "handoffs",
     "prompt_override",
     "last_feedback",
     "resume_claude_session_id",

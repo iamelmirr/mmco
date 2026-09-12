@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     max_attempts_per_task: int = 3
     max_reformulations_per_task: int = 2
     max_subtasks_per_task: int = 5
+    # How many times executors may hand a single task back and forth (planner take_over guard).
+    max_handoffs_per_task: int = 3
     max_loop_iterations: int = 100
     max_session_cost_usd: float | None = None
     stop_on_task_failure: bool = True

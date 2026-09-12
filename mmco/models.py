@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 
 SessionStatus = Literal["planning", "executing", "awaiting_input", "awaiting_approval", "paused", "done", "failed", "cancelled"]
 TaskStatus = Literal["pending", "in_progress", "done", "failed", "blocked", "skipped"]
-NextAction = Literal["continue", "retry", "reformulate", "add_task", "clarify", "fail"]
+NextAction = Literal["continue", "retry", "reformulate", "add_task", "clarify", "fail", "take_over"]
 PlannerPurpose = Literal["plan", "eval", "reformulate", "clarify", "review", "choose_executor", "execute"]
 ClarificationKind = Literal["question", "escalation"]
 AgentName = Literal["claude", "planner"]
@@ -71,6 +71,7 @@ class Task(TaskSpec):
     attempts: int = 0
     cycle_attempts: int = 0  # attempts since the last reformulation
     reformulations: int = 0
+    handoffs: int = 0  # times an executor handed the task off to the other executor (take_over)
     executor: AgentName = "claude"
     prompt_override: str | None = None
     last_feedback: str | None = None

@@ -353,6 +353,7 @@ class Dashboard:
                     "description": task.description,
                     "status": task.status,
                     "stage": stage,
+                    "executor": task.executor,
                     "attempts": task.attempts,
                     "reformulations": task.reformulations,
                     "verify_commands": task.verify_commands,

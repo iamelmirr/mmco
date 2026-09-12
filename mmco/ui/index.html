@@ -349,6 +349,7 @@ function statusClass(status, running) {
   return "";
 }
 const pill = (status, running) => `<span class="pill ${statusClass(status, running)}">${esc(running && ["planning", "executing"].includes(status) ? (status === "planning" ? "Planning" : "Working") : STATUS_TEXT[status] || status)}</span>`;
+const agentName = (agent) => agent === "planner" ? "DeepSeek" : "Claude";
 const money = (v) => `$${(Number(v) || 0).toFixed(2)}`;
 function duration(ms) {
   const s = Math.round((ms || 0) / 1000);
@@ -748,6 +749,7 @@ function taskRow(t, index, running) {
       <button class="stage-top" data-action="toggle-task" data-task="${esc(t.id)}" aria-expanded="${open}">
         <span class="stage-title">${esc(t.title)}</span>
         <span class="stage-meta">
+          ${t.executor === "planner" ? '<span class="badge project">DeepSeek</span>' : ""}
           ${t.attempts > 1 ? `<span>${t.attempts} attempts</span>` : ""}
           ${t.duration_ms ? `<span>${duration(t.duration_ms)}</span>` : ""}
           ${t.cost ? `<span>${money(t.cost)}</span>` : ""}
@@ -776,7 +778,7 @@ function taskDetail(t) {
     const r = ex.result;
     const checks = [...ex.verify_results.map((v) => ({ ...v, kind: "" })), ...(ex.regression_results || []).filter((v) => v.exit_code !== 0 || v.timed_out).map((v) => ({ ...v, kind: "earlier task" }))];
     parts.push(`<div class="attempt">
-      <h4>Attempt ${ex.attempt} ${ev ? `<span class="pill ${ev.satisfied ? "done" : "waiting"}">${esc({ continue: "Accepted", retry: "Sent back", reformulate: "Prompt rewritten", add_task: "Added tasks", clarify: "Asked you", fail: "Stuck" }[ev.next_action] || ev.next_action)}</span>` : ""}
+      <h4>Attempt ${ex.attempt} <span class="pill ${ex.agent === "planner" ? "planner" : "running"}">Built by ${esc(agentName(ex.agent))}</span> ${ev ? `<span class="pill ${ev.satisfied ? "done" : "waiting"}">${esc({ continue: "Accepted", retry: "Sent back", reformulate: "Prompt rewritten", add_task: "Added tasks", clarify: "Asked you", fail: "Stuck" }[ev.next_action] || ev.next_action)}</span>` : ""}
         <span class="muted" style="font-weight:400">${duration(r.duration_ms)}${r.cost_usd != null ? ", " + money(r.cost_usd) : ""}${r.timed_out ? ", timed out" : ""}${ex.refusal_detected ? ", refusal detected" : ""}</span></h4>
       ${ev ? `<p class="verdict" style="margin-top:0"><b>DeepSeek:</b> ${esc(ev.reason)}</p>` : ""}
       ${checks.length ? `<ul class="checks">${checks.map((v) => `<li><span class="${v.exit_code === 0 && !v.timed_out ? "ok" : "no"}">${v.exit_code === 0 && !v.timed_out ? "✓" : "✗"}</span><code>${esc(v.command)}</code>${v.kind ? `<span class="muted">(${v.kind})</span>` : ""}</li>`).join("")}</ul>` : ""}

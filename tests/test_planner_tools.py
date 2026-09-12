@@ -87,6 +87,18 @@ def test_transient_error_in_tool_loop_is_retried(settings, db, tmp_path):
     assert calls[0]["error"] and calls[-1]["response_text"]
 
 
+def test_plan_payload_includes_project_map(settings, db, tmp_path):
+    (tmp_path / "app.py").write_text("def hello():\n    return 'hi'\n")
+    session = db.create_session("x", str(tmp_path))
+    client = ScriptedClient([json.dumps({"tasks": [{"description": "a task"}]})])
+    planner = Planner(settings, db, client=client, sleep=lambda _: None)
+    planner.plan(session, "", [])
+    user_message = client.sent[0]["messages"][-1]["content"]
+    payload = json.loads(user_message)
+    assert "project_map" in payload
+    assert "hello" in json.dumps(payload["project_map"])
+
+
 def test_read_tools_pass_read_only_schemas(settings, db, tmp_path):
     (tmp_path / "app.py").write_text("x=1\n")
     session = db.create_session("x", str(tmp_path))

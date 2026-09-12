@@ -62,6 +62,8 @@ class FakePlanner:
         self.choose_calls = 0
         self.raise_if_choose_called = False
         self.executed_feedback = []  # task.last_feedback seen on each execute_task call
+        self.plan_read_tools = None  # last read_tools value seen by plan()
+        self.eval_read_tools = None  # last read_tools value seen by evaluate()
 
     def choose_executor(self, session, task, toolbox):
         if self.raise_if_choose_called:
@@ -77,12 +79,14 @@ class FakePlanner:
             return "done"
         return self.execute_impl(pathlib.Path(session.project_dir), task.description)
 
-    def plan(self, session, listing, clarifications):
+    def plan(self, session, listing, clarifications, read_tools=False, toolbox=None):
         self.plan_calls.append(clarifications)
+        self.plan_read_tools = read_tools
         return self.plans.pop(0)
 
-    def evaluate(self, session, task, execution, history, clarifications):
+    def evaluate(self, session, task, execution, history, clarifications, read_tools=False, toolbox=None):
         self.evaluated.append((task, execution))
+        self.eval_read_tools = read_tools
         return self.verdicts.pop(0)
 
     def reformulate(self, session, task, previous_prompt, failure_reason):
@@ -490,11 +494,11 @@ def test_planner_outage_during_evaluation_keeps_the_work(settings, db, project):
     class FlakyPlanner(FakePlanner):
         failed = False
 
-        def evaluate(self, *args):
+        def evaluate(self, *args, **kwargs):
             if not self.failed:
                 self.failed = True
                 raise PlannerError("openrouter down")
-            return super().evaluate(*args)
+            return super().evaluate(*args, **kwargs)
 
     planner = FlakyPlanner(PlanResponse(tasks=[spec(0, "one")]), [ok()])
     executor = FakeExecutor([writes({"one.txt": "1"})])
@@ -757,6 +761,26 @@ def test_claude_still_used_when_chosen(settings, db, project):
     session = build(settings, db, planner, executor).start(project, "x")
     assert session.status == "done" and executor.calls
     assert db.list_executions(session_id=session.id)[0].agent == "claude"
+
+
+def test_read_tools_enabled_when_planner_is_agentic(settings, db, project):
+    # Default settings.allow_planner_executor is True: the planner reads code while planning/evaluating.
+    planner = FakePlanner(PlanResponse(tasks=[spec(0, "one")]), [ok()])
+    executor = FakeExecutor([writes({"one.txt": "1"})])
+    session = build(settings, db, planner, executor).start(project, "x")
+    assert session.status == "done"
+    assert planner.plan_read_tools is True
+    assert planner.eval_read_tools is True
+
+
+def test_read_tools_disabled_when_flag_off(settings, db, project):
+    settings.allow_planner_executor = False
+    planner = FakePlanner(PlanResponse(tasks=[spec(0, "one")]), [ok()])
+    executor = FakeExecutor([writes({"one.txt": "1"})])
+    session = build(settings, db, planner, executor).start(project, "x")
+    assert session.status == "done"
+    assert planner.plan_read_tools is False
+    assert planner.eval_read_tools is False
 
 
 def test_allow_planner_executor_false_forces_claude(settings, db, project):

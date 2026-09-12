@@ -88,6 +88,7 @@ class Planner:
         payload = {
             "request": session.original_request,
             "project_files": project_files or "(empty directory)",
+            "project_map": build_map(session.project_dir),
             "previous_requests_in_this_project": session.metadata.get("previous_requests", []),
             "executor_context": self.executor_context(session),
             "user_clarifications": _qa(clarifications),

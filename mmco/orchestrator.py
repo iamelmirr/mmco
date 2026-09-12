@@ -216,7 +216,8 @@ class Orchestrator:
                 return False
             logger.info("planning with {}...", self.settings.planner_model)
             plan = self.planner.plan(
-                session, workspace.listing(), self.db.list_clarifications(session.id, True, kind="question")
+                session, workspace.listing(), self.db.list_clarifications(session.id, True, kind="question"),
+                read_tools=self.settings.allow_planner_executor,
             )
             if plan.tasks:
                 specs = sorted(plan.tasks, key=lambda t: t.order_index)
@@ -337,6 +338,7 @@ class Orchestrator:
         evaluation = self.planner.evaluate(
             session, task, execution, self.db.list_evaluations(task_id=task.id),
             self.db.list_clarifications(session.id, True, kind="question"),
+            read_tools=self.settings.allow_planner_executor,
         )
         if evaluation.updated_verify_commands and evaluation.updated_verify_commands != task.verify_commands:
             logger.warning("planner replaced the verify commands: {} → {}",

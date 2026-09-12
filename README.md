@@ -1,21 +1,26 @@
 # MMCO: Multi-Model Coding Orchestrator
 
-You talk to a **planner** (DeepSeek via OpenRouter). It breaks your request into technical tasks and hands them,
-one at a time, to **Claude Code**, which writes the code. After every task the planner checks the real evidence
-(git diff + test results) and decides what happens next, until the whole request is done.
+You talk to a **planner** (DeepSeek via OpenRouter). It reads your codebase, breaks your request into technical
+tasks and, one at a time, decides who executes each: **Claude Code** for real code development, or **DeepSeek
+itself** for docs, content, config, analysis and small edits. After every task the planner checks the real
+evidence (git diff + test results) and decides what happens next — including finishing a task Claude left almost
+done — until the whole request is done.
 
 ```
-you ─► mmco chat ─► planner.plan ─► you approve / change the plan
+you ─► mmco chat ─► planner.plan (reads your code) ─► you approve / change the plan
                                          │
                 ┌────────────────────────┘
                 ▼
-     git checkpoint ─► claude -p (task prompt, with as much context as your rules allow)
+     git checkpoint ─► planner.choose_executor
+                │            ├── Claude Code (task prompt, with as much context as your rules allow)
+                │            └── DeepSeek     (write-enabled file tools, sandboxed to the project dir)
                 ▲                              │
-                │              git diff + task checks + checks of earlier tasks
+                │        git diff + task checks + checks of earlier tasks (the same gates for both)
                 │                              │
                 │                    planner.evaluate
                 ├── retry        (same Claude session, with reviewer feedback)
                 ├── reformulate  (roll back, planner rewrites the prompt)
+                ├── take_over    (DeepSeek finishes what Claude left almost done, bounded per task)
                 ├── add_task     (prerequisites first / follow-ups next)
                 ├── clarify      (asks you)
                 ├── stuck        (asks you: guidance / skip / abort; never fails silently)
@@ -109,6 +114,30 @@ For complete control, `mmco prompts --eject` copies all built-in prompts into th
 (`--global` for all projects). Files starting with `planner_` are DeepSeek's system prompts, files starting with
 `executor_` are what Claude Code receives. Delete a copied file to return to the built-in version.
 
+## DeepSeek as a co-executor
+
+By default the planner is more than a task dispatcher: it reads your code and can do some of the work itself.
+
+- **It sees the codebase, not just a file list.** Every planning and evaluation prompt is given a *project map* —
+  the functions and classes per file, built deterministically (`mmco/projectmap.py`) — and read-only file tools
+  (`read_file`, `search`, `list_dir`) it can call in a bounded loop while it plans and reviews. So it reasons about
+  the real code instead of guessing from names.
+- **It picks the executor per task, at run time.** For each task the planner decides who builds it: Claude Code for
+  real code development, or DeepSeek itself for docs, content, config, analysis and small edits, using
+  write-enabled file tools (`write_file`, `edit_file`). Claude still makes the implementation decisions inside its
+  own tasks — the default `executor_context` is unchanged.
+- **It can take over.** After Claude's attempt, the planner may choose the `take_over` outcome: DeepSeek finishes a
+  task Claude left almost done, building on Claude's on-disk work rather than starting over.
+- **The same gates apply to DeepSeek's own work.** Whoever builds a task, it goes through the identical pipeline —
+  git checkpoint, `verify_commands`, regression checks against earlier tasks, and the escalation path. A task whose
+  checks fail is never marked done, regardless of who built it. DeepSeek's file tools are sandboxed to the project
+  directory, and take_over / executor ping-pong is bounded per task (`MMCO_MAX_HANDOFFS_PER_TASK`) before the task
+  is escalated. The tool-calling loop is capped by `MMCO_PLANNER_MAX_TOOL_CALLS`.
+
+Which agent executed each task is recorded and shown in the dashboard ("Built by DeepSeek" / "Built by Claude").
+Set `MMCO_ALLOW_PLANNER_EXECUTOR=false` to turn all of this off: Claude does everything and the planner gets no
+tools, exactly as before.
+
 ## What it guarantees and how
 
 | Situation | Behaviour |
@@ -117,6 +146,8 @@ For complete control, `mmco prompts --eject` copies all built-in prompts into th
 | A later task breaks earlier work | After every task the checks of all earlier tasks are rerun; a regression sends the task back with the failing output. |
 | Something from the request is missing at the end | Final review: all checks rerun, the planner compares the project with the request and adds tasks for gaps (up to `MMCO_MAX_FINAL_REVIEWS` rounds). Checks that fail at that point become a fix task automatically. |
 | A task keeps failing | Retry (same Claude session with feedback), then reformulation (rollback + new prompt). When the budget is used up, **you are asked** for guidance (fresh budget), `skip` or `abort`. Nothing fails silently. |
+| DeepSeek executes a task itself | Its work goes through the same git checkpoint, `verify_commands` and regression checks as Claude's; a task whose checks fail is never marked done, whoever built it. Its file tools are sandboxed to the project directory. |
+| Executors keep handing work back and forth | take_over and executor ping-pong are bounded per task (`MMCO_MAX_HANDOFFS_PER_TASK`); past that the task is escalated instead of looping. |
 | The planner wrote a wrong check | It can replace the check (`updated_verify_commands`); the new check is run immediately. It can never remove all checks. |
 | Claude API overloaded / rate limited | Retried with backoff without using the task's attempts. |
 | Claude login, credits or usage limit | Session pauses with the reason; `mmco resume` after fixing it. |
@@ -165,6 +196,9 @@ Environment variables, read from `~/.config/mmco/.env`, then `./.env`. See [.env
 | `MMCO_PLANNER_MODEL` | `deepseek/deepseek-v4.1-flash` | any OpenRouter model id |
 | `MMCO_CLAUDE_MODEL` | Claude Code default | e.g. `sonnet` (cheaper) |
 | `MMCO_EXECUTOR_CONTEXT` | `full` | default when no rules file sets it |
+| `MMCO_ALLOW_PLANNER_EXECUTOR` | `true` | let the planner read code and execute some tasks itself; `false` = Claude does everything, no planner tools |
+| `MMCO_MAX_HANDOFFS_PER_TASK` | `3` | bound on take_over / executor ping-pong before a task is escalated |
+| `MMCO_PLANNER_MAX_TOOL_CALLS` | `25` | cap on the planner's tool-calling loop per plan / eval / execute |
 | `MMCO_CLAUDE_MAX_BUDGET_USD_PER_TASK` | none | passed as `--max-budget-usd` |
 | `MMCO_MAX_SESSION_COST_USD` | none | pauses the session when reached |
 | `MMCO_MAX_ATTEMPTS_PER_TASK` / `MMCO_MAX_REFORMULATIONS_PER_TASK` | `3` / `2` | before asking you |

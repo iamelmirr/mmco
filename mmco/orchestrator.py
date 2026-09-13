@@ -553,7 +553,12 @@ class Orchestrator:
                 logger.info("added {} prerequisite task(s); this task runs again after them",
                             len(evaluation.new_tasks))
         elif action == "take_over":
-            self._take_over(session, task, workspace)
+            # With the planner-executor kill-switch off, take_over must not run the planner with a
+            # write-enabled toolbox; downgrade it to a normal Claude retry with the reviewer's feedback.
+            if self.settings.allow_planner_executor:
+                self._take_over(session, task, workspace)
+            else:
+                self._retry(session, task, execution, evaluation, workspace)
         elif action == "retry":
             self._retry(session, task, execution, evaluation, workspace)
         elif action == "reformulate":

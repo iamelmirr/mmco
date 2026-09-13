@@ -871,6 +871,29 @@ def test_take_over_builds_on_claude_work_without_resetting(settings, db, project
     assert "fix it" in executor.calls[1]["prompt"]
 
 
+def test_take_over_downgraded_to_claude_retry_when_flag_off(settings, db, project):
+    # With allow_planner_executor False, a take_over verdict must NOT hand the task to the planner;
+    # it is downgraded to a normal Claude retry so flag-off keeps the old "Claude does everything" behavior.
+    settings.allow_planner_executor = False
+    planner = FakePlanner(PlanResponse(tasks=[spec(0, "feature", ["test -f done.txt"])]),
+                          [verdict("take_over", "claude almost did it", feedback="finish it"), ok()])
+    planner.executor_choice = ("claude", "")
+    planner.raise_if_choose_called = True  # choose_executor must not be consulted with the flag off
+    planner.execute_impl = planner_writes({"planner_wrote.txt": "1"})  # must never run
+    executor = FakeExecutor([writes({"partial.py": "x"}, session_id="claude-9"), writes({"done.txt": "1"})])
+    session = build(settings, db, planner, executor).start(project, "x")
+
+    assert session.status == "done"
+    agents = [e.agent for e in db.list_executions(session_id=session.id)]
+    assert agents == ["claude", "claude"]  # the take_over was downgraded to a Claude retry
+    assert planner.executed_feedback == []  # the planner's execute path was never used
+    assert not (project / "planner_wrote.txt").exists()
+    assert db.list_tasks(session.id)[0].handoffs == 0  # no hand-off happened
+    # The retry continued the same Claude conversation with the reviewer's feedback.
+    assert executor.calls[1]["resume"] == "claude-9"
+    assert "finish it" in executor.calls[1]["prompt"]
+
+
 def test_handoff_counter_escalates(settings, db, project):
     settings.max_handoffs_per_task = 2
     settings.escalate_to_user = False  # so exhaustion fails instead of asking

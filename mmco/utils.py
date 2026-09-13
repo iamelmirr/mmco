@@ -8,6 +8,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -138,6 +139,70 @@ def run_process(cmd: list[str], cwd: str | Path, stdin_text: str | None, timeout
         stderr=stderr or "",
         returncode=proc.returncode,
         timed_out=timed_out,
+        duration_ms=int((time.monotonic() - started) * 1000),
+    )
+
+
+def run_process_streaming(
+    cmd: list[str], cwd: str | Path, stdin_text: str | None, timeout: float, on_line
+) -> ProcessResult:
+    """Like run_process, but call on_line(line) for each stdout line as it arrives.
+
+    Used to stream Claude Code's stream-json output live. The full stdout is still accumulated and
+    returned, so callers parse the final result exactly as with run_process. A watchdog kills the
+    process group on timeout; stderr is drained in a thread to avoid a full-pipe deadlock.
+    """
+    started = time.monotonic()
+    proc = subprocess.Popen(
+        cmd, cwd=str(cwd), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, start_new_session=True,
+    )
+    out_lines: list[str] = []
+    err_chunks: list[str] = []
+    timed_out = {"value": False}
+
+    def drain_err() -> None:
+        try:
+            for line in proc.stderr:  # type: ignore[union-attr]
+                err_chunks.append(line)
+        except (OSError, ValueError):
+            pass
+
+    def watchdog() -> None:
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out["value"] = True
+            _kill_group(proc)
+
+    err_thread = threading.Thread(target=drain_err, daemon=True)
+    watch_thread = threading.Thread(target=watchdog, daemon=True)
+    err_thread.start()
+    watch_thread.start()
+    try:
+        if stdin_text:
+            proc.stdin.write(stdin_text)  # type: ignore[union-attr]
+        proc.stdin.close()  # type: ignore[union-attr]
+    except (BrokenPipeError, OSError, ValueError):
+        pass
+    try:
+        for line in proc.stdout:  # type: ignore[union-attr]
+            out_lines.append(line)
+            try:
+                on_line(line)
+            except Exception:  # noqa: BLE001 - a bad line must not kill the run
+                pass
+    except KeyboardInterrupt:
+        _kill_group(proc)
+        raise
+    proc.wait()
+    err_thread.join(timeout=2)
+    watch_thread.join(timeout=2)
+    return ProcessResult(
+        stdout="".join(out_lines),
+        stderr="".join(err_chunks),
+        returncode=proc.returncode,
+        timed_out=timed_out["value"],
         duration_ms=int((time.monotonic() - started) * 1000),
     )
 

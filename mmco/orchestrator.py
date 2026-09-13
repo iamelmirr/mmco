@@ -17,6 +17,7 @@ from loguru import logger
 
 from .config import Settings
 from .db import Database
+from .events import EventSink, clear_active_sink, set_active_sink
 from .executor import classify_failure
 from .models import EvalResult, Execution, ExecutionResult, Session, SessionStatus, Task, TaskSpec, VerifyResult
 from .planner import PlannerError
@@ -69,6 +70,7 @@ class Orchestrator:
         )
         self.current_session_id: str | None = None
         self._workspace: Workspace | None = None
+        self._sink: EventSink | None = None
 
     # ---- entry points ---------------------------------------------------
 
@@ -169,6 +171,9 @@ class Orchestrator:
         self._workspace = workspace
         log_path = add_session_log(self.settings.log_dir, session.id)
         logger.debug("session log: {}", log_path)
+        self._sink = EventSink(session.id, self.settings.log_dir) if self.settings.stream_logs else None
+        if self._sink is not None:
+            set_active_sink(self._sink)
         workspace.acquire_lock()
         try:
             if not self.db.list_tasks(session.id) and not self._plan(session, workspace):
@@ -189,6 +194,15 @@ class Orchestrator:
             raise
         finally:
             workspace.release_lock()
+            if self._sink is not None:
+                clear_active_sink(self._sink)
+                self._sink.close()
+                self._sink = None
+
+    def _event(self, source: str, etype: str, text: str = "", **data: Any) -> None:
+        """Emit a structured event to the session's live log (task boundaries, verdicts)."""
+        if getattr(self, "_sink", None) is not None:
+            self._sink.emit(source, etype, text=text, echo=False, **data)
 
     def _plan(self, session: Session, workspace: Workspace) -> bool:
         proposed = session.metadata.get("proposed_plan")
@@ -354,6 +368,8 @@ class Orchestrator:
         logger.bind(event="evaluation", evaluation=evaluation.model_dump()).info(
             "verdict: {} (satisfied={}) — {}", evaluation.next_action, evaluation.satisfied, evaluation.reason
         )
+        self._event("orchestrator", "verdict", text=evaluation.reason,
+                    action=evaluation.next_action, satisfied=evaluation.satisfied)
         self._dispatch(session, task, execution, evaluation, workspace)
 
     def _execute(self, session: Session, task: Task, tasks: list[Task], workspace: Workspace) -> Execution:
@@ -388,6 +404,7 @@ class Orchestrator:
         position = next((i for i, t in enumerate(tasks, 1) if t.id == task.id), "?")
         task.executor = executor
         self.db.save_task(task)
+        self._event("orchestrator", "task_start", title=task.label, executor=executor)
 
         if executor == "planner":
             logger.info(
@@ -586,6 +603,7 @@ class Orchestrator:
         task.resume_claude_session_id = None
         self.db.save_task(task)
         logger.success("✔ task '{}' done", task.label)
+        self._event("orchestrator", "task_done", text=f"✔ {task.label}")
 
     def _take_over(
         self, session: Session, task: Task, evaluation: EvalResult, workspace: Workspace
@@ -671,6 +689,7 @@ class Orchestrator:
         task.resume_claude_session_id = None
         self.db.save_task(task)
         logger.error("✘ task '{}' failed: {}", task.label, reason)
+        self._event("orchestrator", "task_failed", text=f"✘ {task.label}: {truncate(reason, 200)}")
         if self.settings.stop_on_task_failure:
             blocked = self.db.block_pending_tasks(session.id)
             if blocked:

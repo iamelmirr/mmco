@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     max_diff_chars: int = 20_000
     max_output_chars: int = 12_000
 
+    # Stream what the planner and executor are doing live (reasoning, tool calls, results) into a
+    # per-session event log that `mmco logs -f` and the dashboard show. Off = plain non-streaming calls.
+    stream_logs: bool = True
+
     git_checkpoints: bool = True
     db_path: str = "~/.mmco/mmco.db"
     log_dir: str = "~/.mmco/logs"

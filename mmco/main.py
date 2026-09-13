@@ -529,6 +529,66 @@ def sessions(limit: Annotated[int, typer.Option(help="How many to show")] = 20) 
         console.print(_sessions_table(db.list_sessions(limit), db))
 
 
+_EVENT_STYLE = {"planner": "cyan", "claude": "magenta", "orchestrator": "bold white", "checks": "yellow"}
+
+
+def _render_event(event: dict[str, Any]) -> None:
+    from datetime import datetime as _dt
+
+    from .events import SOURCE_LABEL, summarize
+
+    source = event.get("source", "")
+    summary = summarize(source, event.get("type", ""), event.get("text", ""), event)
+    if not summary:
+        return
+    style = _EVENT_STYLE.get(source, "white")
+    label = SOURCE_LABEL.get(source, source)
+    stamp = _dt.fromtimestamp(event.get("ts", 0)).strftime("%H:%M:%S")
+    detail_style = "dim" if event.get("type") == "thinking" else ""
+    console.print(f"[dim]{stamp}[/dim] [{style}]{label:>8}[/{style}] [{detail_style}]{escape(summary)}[/]")
+
+
+@app.command()
+def logs(
+    session_id: Annotated[str | None, typer.Argument(help="Session id (default: most recent)")] = None,
+    follow: Annotated[bool, typer.Option("--follow", "-f", help="Keep streaming new events live")] = False,
+) -> None:
+    """Show the live log of a session: DeepSeek's reasoning and tool calls, and Claude Code's steps."""
+    import time as _time
+
+    with _handle_errors():
+        settings, db = _load()
+        session = db.find_session(session_id) if session_id else next(iter(db.list_sessions(1)), None)
+        if session is None:
+            console.print("No sessions yet.")
+            return
+        path = Path(settings.log_dir).expanduser() / "events" / f"{session.id}.jsonl"
+        console.print(f"[dim]live log · session {session.id[:8]} · {escape(session.original_request[:70])}[/dim]")
+        if not path.exists() and not follow:
+            console.print("[dim]No streamed events for this session"
+                          " (it ran with streaming off, or hasn't started).[/dim]")
+            return
+        pos = 0
+        try:
+            while True:
+                if path.exists():
+                    with path.open("r", encoding="utf-8") as fh:
+                        fh.seek(pos)
+                        for line in fh:
+                            line = line.strip()
+                            if line:
+                                try:
+                                    _render_event(json.loads(line))
+                                except json.JSONDecodeError:
+                                    pass
+                        pos = fh.tell()
+                if not follow:
+                    break
+                _time.sleep(0.4)
+        except KeyboardInterrupt:
+            console.print("\n[dim]stopped following[/dim]")
+
+
 @app.command()
 def rules(
     project_dir: Annotated[Path, typer.Argument(help="Project folder (default: current folder)")] = Path("."),

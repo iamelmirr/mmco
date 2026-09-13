@@ -93,6 +93,10 @@ SETTINGS_FIELDS: list[dict[str, Any]] = [
      "label": "Rerun earlier checks after every task"},
     {"key": "MMCO_CLAUDE_ALLOWED_TOOLS", "field": "claude_allowed_tools", "kind": "text", "group": "Behaviour",
      "label": "Tools Claude may use"},
+    {"key": "MMCO_CLAUDE_PERMISSION_MODE", "field": "claude_permission_mode", "kind": "choice",
+     "choices": ["bypassPermissions", "acceptEdits", "plan", "default"], "group": "Behaviour",
+     "label": "Claude permission mode",
+     "help": "bypassPermissions lets Claude run anything without asking. Narrow it for untrusted work."},
 ]
 
 
@@ -353,6 +357,7 @@ class Dashboard:
                     "description": task.description,
                     "status": task.status,
                     "stage": stage,
+                    "executor": task.executor,
                     "attempts": task.attempts,
                     "reformulations": task.reformulations,
                     "verify_commands": task.verify_commands,

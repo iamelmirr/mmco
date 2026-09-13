@@ -129,6 +129,13 @@ MIGRATIONS: list[str] = [
     ALTER TABLE executions ADD COLUMN regression_results TEXT NOT NULL DEFAULT '[]';
     CREATE INDEX idx_sessions_project ON sessions(project_dir, created_at);
     """,
+    """
+    ALTER TABLE executions ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude';
+    ALTER TABLE tasks ADD COLUMN executor TEXT NOT NULL DEFAULT 'claude';
+    """,
+    """
+    ALTER TABLE tasks ADD COLUMN handoffs INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 _TASK_JSON_FIELDS = ("acceptance_criteria", "files_involved", "interface_contracts", "verify_commands")
@@ -144,11 +151,13 @@ _TASK_UPDATABLE = (
     "attempts",
     "cycle_attempts",
     "reformulations",
+    "handoffs",
     "prompt_override",
     "last_feedback",
     "resume_claude_session_id",
     "start_commit",
     "end_commit",
+    "executor",
 )
 
 
@@ -312,14 +321,19 @@ class Database:
         return self._task(row)
 
     def find_task(self, session_id: str, id_or_prefix: str) -> Task:
+        # An all-digits reference is a 1-based task number (as shown in the UI/CLI). Resolve it
+        # before UUID-prefix matching, so a task whose UUID happens to start with that digit
+        # cannot shadow the numbered task.
+        if id_or_prefix.isdigit():
+            numbered = self.conn.execute(
+                "SELECT * FROM tasks WHERE session_id = ? AND order_index = ?", (session_id, int(id_or_prefix) - 1)
+            ).fetchall()
+            if numbered:
+                return self._task(numbered[0])
         rows = self.conn.execute(
             "SELECT * FROM tasks WHERE session_id = ? AND (id = ? OR id LIKE ?)",
             (session_id, id_or_prefix, f"{id_or_prefix}%"),
         ).fetchall()
-        if not rows and id_or_prefix.isdigit():
-            rows = self.conn.execute(
-                "SELECT * FROM tasks WHERE session_id = ? AND order_index = ?", (session_id, int(id_or_prefix) - 1)
-            ).fetchall()
         if not rows:
             raise NotFoundError(f"no task matches '{id_or_prefix}' in session {session_id}")
         if len(rows) > 1:
@@ -369,16 +383,17 @@ class Database:
         r = execution.result
         with self.conn:
             self.conn.execute(
-                """INSERT INTO executions (id, task_id, session_id, attempt, prompt_sent, claude_output, result_text,
+                """INSERT INTO executions (id, task_id, session_id, attempt, agent, prompt_sent, claude_output, result_text,
                    stderr, exit_code, duration_ms, timed_out, is_error, subtype, stop_reason, refusal_detected,
                    permission_denials, claude_session_id, cost_usd, num_turns, diff_stat, diff, verify_results,
                    regression_results, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     execution.id,
                     execution.task_id,
                     execution.session_id,
                     execution.attempt,
+                    execution.agent,
                     r.prompt,
                     _dumps(r.raw_output) if r.raw_output is not None else None,
                     r.result_text,
@@ -458,6 +473,7 @@ class Database:
             task_id=d["task_id"],
             session_id=d["session_id"],
             attempt=d["attempt"],
+            agent=d["agent"],
             result=result,
             refusal_detected=bool(d["refusal_detected"]),
             diff_stat=d["diff_stat"],

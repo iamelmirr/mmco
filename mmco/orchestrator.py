@@ -21,6 +21,7 @@ from .executor import classify_failure
 from .models import EvalResult, Execution, ExecutionResult, Session, SessionStatus, Task, TaskSpec, VerifyResult
 from .planner import PlannerError
 from .rules import load_rules, prompt_dirs
+from .tools import Toolbox
 from .utils import MMCOError, add_session_log, bullets, dump_crash, load_prompt, render, truncate
 from .workspace import Workspace, run_verify_commands
 
@@ -215,7 +216,8 @@ class Orchestrator:
                 return False
             logger.info("planning with {}...", self.settings.planner_model)
             plan = self.planner.plan(
-                session, workspace.listing(), self.db.list_clarifications(session.id, True, kind="question")
+                session, workspace.listing(), self.db.list_clarifications(session.id, True, kind="question"),
+                read_tools=self.settings.allow_planner_executor,
             )
             if plan.tasks:
                 specs = sorted(plan.tasks, key=lambda t: t.order_index)
@@ -325,10 +327,18 @@ class Orchestrator:
         if execution is None:
             execution = self._execute(session, task, tasks, workspace)
 
+        self._evaluate_and_dispatch(session, task, execution, workspace)
+
+    def _evaluate_and_dispatch(
+        self, session: Session, task: Task, execution: Execution, workspace: Workspace
+    ) -> None:
+        """Judge one execution, apply the hard guards, persist the verdict, and act on it."""
+        s = self.settings
         logger.info("evaluating attempt...")
         evaluation = self.planner.evaluate(
             session, task, execution, self.db.list_evaluations(task_id=task.id),
             self.db.list_clarifications(session.id, True, kind="question"),
+            read_tools=self.settings.allow_planner_executor,
         )
         if evaluation.updated_verify_commands and evaluation.updated_verify_commands != task.verify_commands:
             logger.warning("planner replaced the verify commands: {} → {}",
@@ -348,26 +358,59 @@ class Orchestrator:
 
     def _execute(self, session: Session, task: Task, tasks: list[Task], workspace: Workspace) -> Execution:
         s = self.settings
-        context = self._executor_context(session)
-        resume_id = task.resume_claude_session_id
-        if resume_id and task.last_feedback:
-            prompt = self._retry_prompt(session, task)
-        else:
-            resume_id = None
-            prompt = self._task_prompt(session, task, tasks, context)
-            if task.needs_continuity:
-                resume_id = self._previous_claude_session(tasks, task)
-        system_prompt = "executor_system_minimal.txt" if context == "minimal" else "executor_system.txt"
+        # A Claude retry (--resume with feedback) must stay with Claude; never re-ask who should run it.
+        forced_claude = bool(task.resume_claude_session_id and task.last_feedback)
 
-        position = next((i for i, t in enumerate(tasks, 1) if t.id == task.id), "?")
-        logger.info(
-            "▶ task {}/{} '{}' (attempt {}{}, context: {})",
-            position, len(tasks), task.label, task.attempts + 1, ", resumed session" if resume_id else "", context,
+        executor = "claude"
+        if s.allow_planner_executor and not forced_claude:
+            executor, reason = self.planner.choose_executor(
+                session, task, Toolbox(session.project_dir, allow_write=False)
+            )
+            logger.info("executor for '{}': {} ({})", task.label, executor, reason or "no reason given")
+        # A planner task being retried with feedback restarts from the checkpoint (see _execute_as).
+        return self._execute_as(
+            session, task, tasks, workspace, executor,
+            reset_for_planner_retry=(executor == "planner" and bool(task.last_feedback)),
         )
-        result = self._run_claude(prompt, session.project_dir, resume_id, system_prompt)
+
+    def _execute_as(
+        self, session: Session, task: Task, tasks: list[Task], workspace: Workspace, executor: str,
+        reset_for_planner_retry: bool = False,
+    ) -> Execution:
+        """Run this task with a specific executor and put the result through the shared verify/regression tail.
+
+        reset_for_planner_retry rolls the tree back to the checkpoint before the planner runs. It is meant
+        ONLY for a planner *retry* (which has no conversation to resume, so it must not compound the previous
+        attempt's rolled-back-but-still-on-disk edits). A take_over passes False so the planner BUILDS ON the
+        coding agent's work instead of discarding the very changes it is supposed to finish.
+        """
+        s = self.settings
+        position = next((i for i, t in enumerate(tasks, 1) if t.id == task.id), "?")
+        task.executor = executor
+        self.db.save_task(task)
+
+        if executor == "planner":
+            logger.info(
+                "▶ task {}/{} '{}' (attempt {}, executor: DeepSeek)",
+                position, len(tasks), task.label, task.attempts + 1,
+            )
+            if reset_for_planner_retry:
+                workspace.reset_to(task.start_commit)
+            report = self.planner.execute_task(
+                session, task, Toolbox(session.project_dir, allow_write=True),
+                building_on_work=not reset_for_planner_retry,
+            )
+            result = ExecutionResult(
+                prompt=self._task_block(task), result_text=str(report), cost_usd=None, claude_session_id=None
+            )
+            agent: str = "planner"
+        else:
+            result, agent = self._execute_with_claude(session, task, tasks, position)
+
         diff_stat, diff = workspace.diff_since(task.start_commit)
         verify: list[VerifyResult] = []
         regressions: list[VerifyResult] = []
+        # Planner runs never "time out"; a timed-out Claude run leaves the tree in an unknown state.
         if not result.timed_out:
             verify = run_verify_commands(task.verify_commands, session.project_dir, s.verify_timeout_seconds)
             if s.regression_checks:
@@ -380,9 +423,10 @@ class Orchestrator:
             task_id=task.id,
             session_id=session.id,
             attempt=task.attempts,
+            agent=agent,
             result=result,
-            # Only trust refusal phrasing when the agent also changed nothing.
-            refusal_detected=result.refusal_suspected and not diff.strip(),
+            # Only trust refusal phrasing for Claude, and only when it also changed nothing.
+            refusal_detected=agent == "claude" and result.refusal_suspected and not diff.strip(),
             diff_stat=diff_stat,
             diff=truncate(diff, s.max_diff_chars),
             verify_results=verify,
@@ -393,6 +437,26 @@ class Orchestrator:
         if execution.refusal_detected:
             logger.warning("refusal detected in executor output")
         return execution
+
+    def _execute_with_claude(
+        self, session: Session, task: Task, tasks: list[Task], position: Any
+    ) -> tuple[ExecutionResult, str]:
+        context = self._executor_context(session)
+        resume_id = task.resume_claude_session_id
+        if resume_id and task.last_feedback:
+            prompt = self._retry_prompt(session, task)
+        else:
+            resume_id = None
+            prompt = self._task_prompt(session, task, tasks, context)
+            if task.needs_continuity:
+                resume_id = self._previous_claude_session(tasks, task)
+        system_prompt = "executor_system_minimal.txt" if context == "minimal" else "executor_system.txt"
+        logger.info(
+            "▶ task {}/{} '{}' (attempt {}{}, context: {})",
+            position, len(tasks), task.label, task.attempts + 1, ", resumed session" if resume_id else "", context,
+        )
+        result = self._run_claude(prompt, session.project_dir, resume_id, system_prompt)
+        return result, "claude"
 
     def _run_claude(
         self, prompt: str, project_dir: str, resume_id: str | None, system_prompt: str = "executor_system.txt"
@@ -491,6 +555,13 @@ class Orchestrator:
                 self.db.save_task(task)
                 logger.info("added {} prerequisite task(s); this task runs again after them",
                             len(evaluation.new_tasks))
+        elif action == "take_over":
+            # With the planner-executor kill-switch off, take_over must not run the planner with a
+            # write-enabled toolbox; downgrade it to a normal Claude retry with the reviewer's feedback.
+            if self.settings.allow_planner_executor:
+                self._take_over(session, task, evaluation, workspace)
+            else:
+                self._retry(session, task, execution, evaluation, workspace)
         elif action == "retry":
             self._retry(session, task, execution, evaluation, workspace)
         elif action == "reformulate":
@@ -515,6 +586,30 @@ class Orchestrator:
         task.resume_claude_session_id = None
         self.db.save_task(task)
         logger.success("✔ task '{}' done", task.label)
+
+    def _take_over(
+        self, session: Session, task: Task, evaluation: EvalResult, workspace: Workspace
+    ) -> None:
+        """The planner finishes the task itself, building on the coding agent's on-disk work.
+
+        A per-task hand-off counter stops the two executors from ping-ponging forever: this method →
+        _execute_as → _evaluate_and_dispatch → _dispatch may recurse back here on another take_over, but
+        the mutual recursion is bounded by max_handoffs_per_task. handoffs is a conservative lifetime cap
+        and is intentionally NOT reset on reformulation.
+        """
+        task.handoffs += 1
+        # Thread the reviewer's guidance to the planner so it knows what still needs doing. The tree is
+        # NOT reset here, so the planner builds on the coding agent's on-disk work (see _execute_as).
+        task.last_feedback = evaluation.feedback_for_executor or evaluation.reason
+        self.db.save_task(task)
+        if task.handoffs > self.settings.max_handoffs_per_task:
+            self._fail(session, task, "executors kept handing the task back and forth", workspace)
+            return
+        logger.info("planner is taking over '{}' to finish it (hand-off {})", task.label, task.handoffs)
+        tasks = self.db.list_tasks(session.id)
+        # Build on whatever the coding agent left on disk; never reset before a take_over.
+        execution = self._execute_as(session, task, tasks, workspace, "planner", reset_for_planner_retry=False)
+        self._evaluate_and_dispatch(session, task, execution, workspace)
 
     def _retry(
         self, session: Session, task: Task, execution: Execution, evaluation: EvalResult, workspace: Workspace

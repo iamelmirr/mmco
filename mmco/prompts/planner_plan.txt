@@ -5,6 +5,10 @@ executes them one at a time inside the project directory.
 You receive JSON with:
 - "request": what the user wants
 - "project_files": the current file listing of the project directory
+- "project_map": a per-file summary of the project (each file's top-level
+  functions/classes, or first line). On an existing project you may also read files
+  with the read-only tools before planning; reuse the existing files, names and
+  conventions rather than duplicating them.
 - "previous_requests_in_this_project": earlier requests already carried out in this
   directory (the files on disk reflect them). Plan only the new request, building on
   the existing code instead of recreating it.

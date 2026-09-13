@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from mmco.db import Database
-from mmco.models import TaskSpec
+from mmco.models import Execution, ExecutionResult, TaskSpec
 from mmco.web import ApiError, Dashboard, make_handler
 
 
@@ -148,6 +148,30 @@ def test_plan_approval_and_answers_resume_the_session(dashboard, tmp_path):
     db.close()
     state = dashboard.session_state(session.id)
     assert state["session"]["decision_pending"] and state["questions"] == []
+
+
+def test_planner_executed_task_surfaces_its_agent(dashboard, tmp_path):
+    settings = dashboard.settings()
+    db = Database(settings.db_path)
+    project = tmp_path / "app"
+    project.mkdir()
+    session = db.create_session("x", str(project))
+    task = db.insert_tasks(session.id, [TaskSpec(title="a", description="do a")])[0]
+    task.executor = "planner"
+    task.attempts = 1
+    db.save_task(task)
+    db.add_execution(Execution(
+        task_id=task.id, session_id=session.id, attempt=1, agent="planner",
+        result=ExecutionResult(prompt="do a"),
+    ))
+    db.close()
+
+    state = dashboard.session_state(session.id)
+    task_payload = next(t for t in state["tasks"] if t["id"] == task.id)
+    assert task_payload["executor"] == "planner"
+
+    dump = dashboard.session_detail(session.id)
+    assert any(e["agent"] == "planner" for e in dump["executions"])
 
 
 def test_session_state_for_a_run_that_has_not_created_its_session(dashboard):

@@ -58,20 +58,25 @@ class Settings(BaseSettings):
     planner_temperature: float = 0.2
     planner_json_mode: bool = True
     planner_max_retries: int = 3
+    planner_max_tool_calls: int = 25
     planner_timeout_seconds: int = 180
 
     claude_binary: str = "claude"
-    claude_model: str | None = None
-    claude_allowed_tools: str = "Read,Write,Edit,Bash,Glob,Grep"
-    claude_permission_mode: str = "acceptEdits"
-    claude_timeout_seconds: int = 900
+    claude_model: str | None = "opus"
+    claude_allowed_tools: str = "Read,Write,Edit,Bash,Glob,Grep,WebFetch,WebSearch"
+    claude_permission_mode: str = "bypassPermissions"
+    claude_timeout_seconds: int = 1800
     # Default for how much Claude is told; a rules.md front matter overrides it (full | task | minimal).
     executor_context: str = "full"
     claude_max_budget_usd_per_task: float | None = None
+    # Let the planner (DeepSeek) execute suitable tasks itself instead of always dispatching Claude.
+    allow_planner_executor: bool = True
 
     max_attempts_per_task: int = 3
     max_reformulations_per_task: int = 2
     max_subtasks_per_task: int = 5
+    # How many times executors may hand a single task back and forth (planner take_over guard).
+    max_handoffs_per_task: int = 3
     max_loop_iterations: int = 100
     max_session_cost_usd: float | None = None
     stop_on_task_failure: bool = True

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from types import SimpleNamespace
 from typing import Any, TypeVar
 
 import openai
@@ -12,6 +13,7 @@ from pydantic import BaseModel, ValidationError
 
 from .config import Settings
 from .db import Database
+from .events import Batcher, active_sink
 from .models import (
     Clarification,
     ClarifyResponse,
@@ -422,6 +424,58 @@ class Planner:
             raise PlannerError(f"planner '{purpose}' did not answer after exhausting its tool budget")
         return content
 
+    def _invoke(self, kwargs: dict[str, Any], purpose: PlannerPurpose) -> tuple[Any, float | None]:
+        """Make one completion, streaming it live when a sink is active, else a plain blocking call.
+
+        Returns ``(message, cost)`` where ``message`` has ``.content`` and ``.tool_calls`` — the same
+        shape both paths, so callers are unchanged. Exceptions propagate to the caller's error handling.
+        """
+        sink = active_sink() if self.settings.stream_logs else None
+        if sink is None:
+            response = self.client.chat.completions.create(**kwargs)
+            return response.choices[0].message, _usage_cost(response)
+
+        stream = self.client.chat.completions.create(**{**kwargs, "stream": True,
+                                                        "stream_options": {"include_usage": True}})
+        content = ""
+        text = Batcher(sink, "planner", "text")
+        thinking = Batcher(sink, "planner", "thinking")
+        tools: dict[int, dict[str, str]] = {}
+        usage = None
+        for chunk in stream:
+            if getattr(chunk, "usage", None):
+                usage = chunk.usage
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            extra = getattr(delta, "model_extra", None) or {}
+            reasoning = extra.get("reasoning") or extra.get("reasoning_content") or getattr(delta, "reasoning", None)
+            if reasoning:
+                thinking.add(reasoning)
+            if delta.content:
+                content += delta.content
+                text.add(delta.content)
+            for call in delta.tool_calls or []:
+                slot = tools.setdefault(call.index, {"id": "", "name": "", "args": ""})
+                if call.id:
+                    slot["id"] = call.id
+                if call.function and call.function.name:
+                    slot["name"] += call.function.name
+                if call.function and call.function.arguments:
+                    slot["args"] += call.function.arguments
+        thinking.flush()
+        text.flush()
+        tool_calls = []
+        for index in sorted(tools):
+            slot = tools[index]
+            sink.emit("planner", "tool", name=slot["name"], args=slot["args"])
+            tool_calls.append(SimpleNamespace(
+                id=slot["id"] or f"call_{index}", type="function",
+                function=SimpleNamespace(name=slot["name"], arguments=slot["args"]),
+            ))
+        message = SimpleNamespace(content=content or None, tool_calls=tool_calls or None)
+        return message, _usage_cost(SimpleNamespace(usage=usage))
+
     def _create_and_persist(
         self, session_id: str, purpose: PlannerPurpose, kwargs: dict[str, Any], task_id: str | None
     ) -> Any:
@@ -435,8 +489,7 @@ class Planner:
         for attempt in range(1, s.planner_max_retries + 1):
             started = time.monotonic()
             try:
-                response = self.client.chat.completions.create(**kwargs)
-                message = response.choices[0].message
+                message, cost = self._invoke(kwargs, purpose)
             except Exception as exc:  # noqa: BLE001 - every failure is logged; fatal ones re-raised below
                 elapsed = int((time.monotonic() - started) * 1000)
                 self.db.add_planner_call(
@@ -456,7 +509,6 @@ class Planner:
 
             elapsed = int((time.monotonic() - started) * 1000)
             content = message.content or ""
-            cost = _usage_cost(response)
             self.db.add_planner_call(
                 session_id, purpose, s.planner_model, kwargs, content, elapsed, task_id, cost_usd=cost
             )
@@ -483,8 +535,8 @@ class Planner:
         for attempt in range(1, s.planner_max_retries + 1):
             started = time.monotonic()
             try:
-                response = self.client.chat.completions.create(**kwargs)
-                content = response.choices[0].message.content or ""
+                message, cost = self._invoke(kwargs, purpose)
+                content = message.content or ""
             except Exception as exc:  # noqa: BLE001 - every failure is logged, fatal ones re-raised below
                 elapsed = int((time.monotonic() - started) * 1000)
                 self.db.add_planner_call(
@@ -503,7 +555,6 @@ class Planner:
                 continue
 
             elapsed = int((time.monotonic() - started) * 1000)
-            cost = _usage_cost(response)
             self.db.add_planner_call(
                 session_id, purpose, s.planner_model, kwargs, content, elapsed, task_id, cost_usd=cost
             )

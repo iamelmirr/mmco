@@ -13,9 +13,10 @@ from typing import Any, Literal
 from loguru import logger
 
 from .config import Settings
+from .events import EventSink, active_sink
 from .models import ExecutionResult
 from .rules import prompt_dirs
-from .utils import MMCOError, ProcessResult, load_prompt, run_process
+from .utils import MMCOError, ProcessResult, load_prompt, run_process, run_process_streaming
 
 REFUSAL_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
@@ -118,14 +119,18 @@ class Executor:
         resume_session_id: str | None = None,
         project_dir: str | Path | None = None,
         system_prompt: str = "executor_system.txt",
+        stream: bool = False,
     ) -> list[str]:
         s = self.settings
         # The prompt goes through stdin: it can be long, and --allowedTools is variadic,
         # so a trailing positional prompt would be swallowed as a tool name.
+        # stream-json emits one JSON object per line as Claude works (thinking, tool use, results),
+        # which we surface live; a plain json result is enough when nobody is watching (tests).
+        output_format = ["stream-json", "--verbose"] if stream else ["json"]
         cmd = [
             self.resolve_binary(),
             "-p",
-            "--output-format", "json",
+            "--output-format", *output_format,
             "--allowedTools", s.claude_allowed_tools,
             "--permission-mode", s.claude_permission_mode,
             "--append-system-prompt", load_prompt(system_prompt, *prompt_dirs(project_dir, s.prompts_dir)),
@@ -145,11 +150,21 @@ class Executor:
         resume_session_id: str | None = None,
         system_prompt: str = "executor_system.txt",
     ) -> ExecutionResult:
-        cmd = self.build_command(resume_session_id, project_dir, system_prompt)
+        # Stream live only when someone is watching this session and we own the default runner
+        # (a test-injected runner or a disabled setting keeps the simple, non-streaming json path).
+        sink = active_sink() if self.settings.stream_logs else None
+        stream = sink is not None and self.runner is run_process
+        cmd = self.build_command(resume_session_id, project_dir, system_prompt, stream=stream)
         logger.bind(event="executor_call", prompt=prompt, resume=resume_session_id).debug(
-            "running claude in {} (resume={})", project_dir, resume_session_id
+            "running claude in {} (resume={}, stream={})", project_dir, resume_session_id, stream
         )
-        proc = self.runner(cmd, str(project_dir), prompt, self.settings.claude_timeout_seconds)
+        if stream:
+            proc = run_process_streaming(
+                cmd, str(project_dir), prompt, self.settings.claude_timeout_seconds,
+                lambda line: _emit_claude_event(sink, line),
+            )
+        else:
+            proc = self.runner(cmd, str(project_dir), prompt, self.settings.claude_timeout_seconds)
         data = parse_claude_output(proc.stdout)
 
         if data is not None:
@@ -200,3 +215,44 @@ def _as_float(value: Any) -> float | None:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _tool_summary(name: str, tool_input: Any) -> str:
+    """A compact description of a Claude tool call for the live log."""
+    if not isinstance(tool_input, dict):
+        return str(tool_input)
+    if name == "Bash":
+        return str(tool_input.get("command", ""))
+    for key in ("file_path", "path", "pattern", "query", "url", "command"):
+        if key in tool_input:
+            return str(tool_input[key])
+    return json.dumps(tool_input, ensure_ascii=False)
+
+
+def _emit_claude_event(sink: EventSink, line: str) -> None:
+    """Parse one Claude `stream-json` line and emit the interesting bits to the live log."""
+    line = line.strip()
+    if not line:
+        return
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return
+    etype = event.get("type")
+    if etype == "assistant":
+        for block in event.get("message", {}).get("content", []):
+            kind = block.get("type")
+            if kind == "text" and block.get("text", "").strip():
+                sink.emit("claude", "text", text=block["text"])
+            elif kind == "thinking" and block.get("thinking", "").strip():
+                sink.emit("claude", "thinking", text=block["thinking"])
+            elif kind == "tool_use":
+                sink.emit("claude", "tool", name=block.get("name", "tool"),
+                          args=_tool_summary(block.get("name", ""), block.get("input")))
+    elif etype == "user":
+        for block in event.get("message", {}).get("content", []):
+            if block.get("type") == "tool_result":
+                content = block.get("content")
+                if isinstance(content, list):
+                    content = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
+                sink.emit("claude", "tool_result", text=str(content or ""), is_error=bool(block.get("is_error")))

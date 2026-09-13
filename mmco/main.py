@@ -572,16 +572,19 @@ def logs(
         try:
             while True:
                 if path.exists():
-                    with path.open("r", encoding="utf-8") as fh:
+                    with path.open("rb") as fh:
                         fh.seek(pos)
-                        for line in fh:
-                            line = line.strip()
-                            if line:
+                        chunk = fh.read()
+                    # Only consume up to the last complete line; a torn final line waits for the next poll.
+                    end = chunk.rfind(b"\n")
+                    if end != -1:
+                        pos += end + 1
+                        for raw in chunk[: end + 1].decode("utf-8", "replace").splitlines():
+                            if raw.strip():
                                 try:
-                                    _render_event(json.loads(line))
+                                    _render_event(json.loads(raw))
                                 except json.JSONDecodeError:
                                     pass
-                        pos = fh.tell()
                 if not follow:
                     break
                 _time.sleep(0.4)

@@ -171,10 +171,11 @@ class Orchestrator:
         self._workspace = workspace
         log_path = add_session_log(self.settings.log_dir, session.id)
         logger.debug("session log: {}", log_path)
+        # Acquire the lock before creating the sink, so a lock failure can't leak the global sink/fd.
+        workspace.acquire_lock()
         self._sink = EventSink(session.id, self.settings.log_dir) if self.settings.stream_logs else None
         if self._sink is not None:
             set_active_sink(self._sink)
-        workspace.acquire_lock()
         try:
             if not self.db.list_tasks(session.id) and not self._plan(session, workspace):
                 return session

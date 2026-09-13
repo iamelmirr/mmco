@@ -175,16 +175,22 @@ def run_process_streaming(
             timed_out["value"] = True
             _kill_group(proc)
 
+    def feed_stdin() -> None:
+        # Write stdin on its own thread (like communicate) so a large prompt can't deadlock against
+        # a process that starts producing stdout before it has drained all of stdin.
+        try:
+            if stdin_text:
+                proc.stdin.write(stdin_text)  # type: ignore[union-attr]
+            proc.stdin.close()  # type: ignore[union-attr]
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+
     err_thread = threading.Thread(target=drain_err, daemon=True)
     watch_thread = threading.Thread(target=watchdog, daemon=True)
+    stdin_thread = threading.Thread(target=feed_stdin, daemon=True)
     err_thread.start()
     watch_thread.start()
-    try:
-        if stdin_text:
-            proc.stdin.write(stdin_text)  # type: ignore[union-attr]
-        proc.stdin.close()  # type: ignore[union-attr]
-    except (BrokenPipeError, OSError, ValueError):
-        pass
+    stdin_thread.start()
     try:
         for line in proc.stdout:  # type: ignore[union-attr]
             out_lines.append(line)
@@ -196,6 +202,7 @@ def run_process_streaming(
         _kill_group(proc)
         raise
     proc.wait()
+    stdin_thread.join(timeout=2)
     err_thread.join(timeout=2)
     watch_thread.join(timeout=2)
     return ProcessResult(

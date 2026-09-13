@@ -62,10 +62,10 @@ class Settings(BaseSettings):
     planner_timeout_seconds: int = 180
 
     claude_binary: str = "claude"
-    claude_model: str | None = None
-    claude_allowed_tools: str = "Read,Write,Edit,Bash,Glob,Grep"
-    claude_permission_mode: str = "acceptEdits"
-    claude_timeout_seconds: int = 900
+    claude_model: str | None = "opus"
+    claude_allowed_tools: str = "Read,Write,Edit,Bash,Glob,Grep,WebFetch,WebSearch"
+    claude_permission_mode: str = "bypassPermissions"
+    claude_timeout_seconds: int = 1800
     # Default for how much Claude is told; a rules.md front matter overrides it (full | task | minimal).
     executor_context: str = "full"
     claude_max_budget_usd_per_task: float | None = None

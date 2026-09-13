@@ -39,7 +39,9 @@ def test_successful_run_is_parsed(settings, tmp_path):
     assert call["timeout"] == settings.claude_timeout_seconds
     cmd = call["cmd"]
     assert cmd[1] == "-p" and cmd[cmd.index("--output-format") + 1] == "json"
-    assert cmd[cmd.index("--allowedTools") + 1] == "Read,Write,Edit,Bash,Glob,Grep"
+    assert cmd[cmd.index("--allowedTools") + 1] == "Read,Write,Edit,Bash,Glob,Grep,WebFetch,WebSearch"
+    assert cmd[cmd.index("--permission-mode") + 1] == "bypassPermissions"  # permissive default
+    assert cmd[cmd.index("--model") + 1] == "opus"  # Opus by default
     assert "--resume" not in cmd
 
 

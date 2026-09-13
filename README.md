@@ -60,7 +60,7 @@ you ─► mmco chat ─► planner.plan (reads your code) ─► you approve / 
 ## Quickstart
 
 ```bash
-git clone <this-repo-url>
+git clone https://github.com/iamelmirr/mmco.git
 cd mmco
 ./install.sh          # creates .venv, links `mmco` into ~/.local/bin, then runs first-time setup
 ```
@@ -313,5 +313,4 @@ The design notes and implementation plans live in [`docs/plans/`](docs/plans/).
 
 ## License
 
-No license file is currently set, so all rights are reserved by default. If you intend to open the
-project for reuse, add a `LICENSE` file with the terms you want.
+Released under the [MIT License](LICENSE) — free to use, modify and distribute.

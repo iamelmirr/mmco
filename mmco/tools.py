@@ -7,10 +7,12 @@ OpenAI function-calling schemas so the planner can invoke these tools.
 
 from __future__ import annotations
 
+import fnmatch
+import subprocess
 from pathlib import Path
 
 from .utils import MMCOError
-from .workspace import _LISTING_SKIP_DIRS
+from .workspace import DEFAULT_EXCLUDES, _LISTING_SKIP_DIRS
 
 
 class ToolError(MMCOError):
@@ -37,10 +39,84 @@ class Toolbox:
             raise ToolError(f"path escapes the sandbox: {path}")
         return resolved
 
+    # -- exclusion rules -------------------------------------------------
+
+    def _in_protected_dir(self, relpath: str) -> bool:
+        """True if any path component is a directory we never touch (``.git``, ``.venv``, ...)."""
+        return any(part in _LISTING_SKIP_DIRS for part in Path(relpath).parts)
+
+    def _is_excluded(self, relpath: str) -> bool:
+        """Shared rule: is ``relpath`` under a skip-dir or matched by DEFAULT_EXCLUDES?
+
+        This works without git so it also guards non-git directories. It does NOT itself
+        consult ``.gitignore``; :meth:`read_file` layers ``git check-ignore`` on top and
+        :meth:`search` enumerates via ``git ls-files`` so gitignored files are never scanned.
+        """
+        if self._in_protected_dir(relpath):
+            return True
+        parts = Path(relpath).parts
+        basename = parts[-1] if parts else relpath
+        for pattern in DEFAULT_EXCLUDES:
+            trimmed = pattern.rstrip("/")
+            if pattern.endswith("/"):
+                if trimmed in parts:
+                    return True
+            elif (
+                fnmatch.fnmatch(basename, trimmed)
+                or fnmatch.fnmatch(relpath, trimmed)
+                or any(fnmatch.fnmatch(part, trimmed) for part in parts)
+            ):
+                return True
+        return False
+
+    def _git_check_ignore(self, relpath: str) -> bool:
+        """True if git would ignore ``relpath`` (returns False when not a git repo)."""
+        try:
+            proc = subprocess.run(
+                ["git", "check-ignore", "-q", "--", relpath],
+                cwd=self.root, capture_output=True, text=True,
+            )
+        except OSError:
+            return False
+        return proc.returncode == 0
+
+    def _git_listing(self) -> list[str] | None:
+        """Files git tracks or would show (tracked + untracked, minus ignored); None if not a git repo."""
+        try:
+            proc = subprocess.run(
+                ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+                cwd=self.root, capture_output=True, text=True,
+            )
+        except OSError:
+            return None
+        if proc.returncode != 0:
+            return None
+        return [line for line in proc.stdout.splitlines() if line]
+
+    def _candidate_files(self):
+        """Yield sandbox-relative posix paths worth scanning, skipping gitignored/excluded files."""
+        tracked = self._git_listing()
+        if tracked is not None:
+            for rel in tracked:
+                if not self._is_excluded(rel):
+                    yield rel
+            return
+        for current, dirnames, filenames in _walk(self.root):
+            dirnames[:] = sorted(d for d in dirnames if d not in _LISTING_SKIP_DIRS)
+            for filename in sorted(filenames):
+                rel = (current / filename).relative_to(self.root).as_posix()
+                if not self._is_excluded(rel):
+                    yield rel
+
     # -- read ------------------------------------------------------------
 
     def read_file(self, path) -> str:
         target = self._resolve(path)
+        relpath = target.relative_to(self.root).as_posix()
+        if self._is_excluded(relpath) or self._git_check_ignore(relpath):
+            raise ToolError(
+                f"refusing to read {path}: it is gitignored (may contain secrets or build artifacts)"
+            )
         if not target.exists():
             raise ToolError(f"file not found: {path}")
         if not target.is_file():
@@ -56,25 +132,22 @@ class Toolbox:
     def search(self, query, max_results: int = 50) -> str:
         needle = query.lower()
         hits: list[str] = []
-        for current, dirnames, filenames in _walk(self.root):
-            dirnames[:] = sorted(d for d in dirnames if d not in _LISTING_SKIP_DIRS)
-            for filename in sorted(filenames):
-                file_path = current / filename
-                try:
-                    # Skip symlinks (or anything) that resolves outside the sandbox.
-                    if not file_path.resolve().is_relative_to(self.root):
-                        continue
-                    if file_path.stat().st_size > self.max_bytes:
-                        continue
-                    text = file_path.read_text(encoding="utf-8")
-                except (OSError, UnicodeDecodeError):
-                    continue  # skip binary-looking / unreadable files
-                relpath = file_path.relative_to(self.root).as_posix()
-                for lineno, line in enumerate(text.splitlines(), start=1):
-                    if needle in line.lower():
-                        hits.append(f"{relpath}:{lineno}: {line.rstrip()}")
-                        if len(hits) >= max_results:
-                            return "\n".join(hits)
+        for relpath in self._candidate_files():
+            file_path = self.root / relpath
+            try:
+                # Skip symlinks (or anything) that resolves outside the sandbox.
+                if not file_path.resolve().is_relative_to(self.root):
+                    continue
+                if file_path.stat().st_size > self.max_bytes:
+                    continue
+                text = file_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue  # skip binary-looking / unreadable files
+            for lineno, line in enumerate(text.splitlines(), start=1):
+                if needle in line.lower():
+                    hits.append(f"{relpath}:{lineno}: {line.rstrip()}")
+                    if len(hits) >= max_results:
+                        return "\n".join(hits)
         if not hits:
             return f"no matches for {query!r}"
         return "\n".join(hits)
@@ -101,6 +174,8 @@ class Toolbox:
         if not self.allow_write:
             raise ToolError("write access is disabled (read-only mode)")
         target = self._resolve(path)
+        if self._in_protected_dir(target.relative_to(self.root).as_posix()):
+            raise ToolError(f"refusing to write {path}: it is under a protected directory (.git/, .venv/, ...)")
         text = content.rstrip("\n") + "\n"
         data = text.encode("utf-8")
         if len(data) > self.max_bytes:
@@ -113,6 +188,8 @@ class Toolbox:
         if not self.allow_write:
             raise ToolError("write access is disabled (read-only mode)")
         target = self._resolve(path)
+        if self._in_protected_dir(target.relative_to(self.root).as_posix()):
+            raise ToolError(f"refusing to edit {path}: it is under a protected directory (.git/, .venv/, ...)")
         if not target.is_file():
             raise ToolError(f"file not found: {path}")
         try:
@@ -152,7 +229,7 @@ class Toolbox:
             return method(arguments)
         except KeyError as e:
             return f"ERROR: missing argument {e} for tool {name!r}"
-        except (ToolError, TypeError, ValueError) as e:
+        except (ToolError, TypeError, ValueError, OSError) as e:
             return f"ERROR: {e}"
 
     # -- schemas ---------------------------------------------------------

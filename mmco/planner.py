@@ -241,11 +241,23 @@ class Planner:
         )
         return choice.executor, choice.reason
 
-    def execute_task(self, session: Session, task: Task, toolbox: "Toolbox") -> str:
-        """Execute ``task`` directly via the write-enabled tool loop; return a short report."""
+    def execute_task(
+        self, session: Session, task: Task, toolbox: "Toolbox", building_on_work: bool = False
+    ) -> str:
+        """Execute ``task`` directly via the write-enabled tool loop; return a short report.
+
+        ``building_on_work`` is True when the working tree already holds prior work to build on (a
+        take_over, or a first attempt after earlier tasks) and False when it was just rolled back to a
+        clean checkpoint (a planner retry). It only affects how the starting point is described.
+        """
         payload = {
             "task": _task_payload(task),
             "project_map": build_map(session.project_dir),
+            "starting_point": (
+                "the current working tree, which already contains prior work you should build on"
+                if building_on_work
+                else "a clean checkpoint (your previous attempt was rolled back)"
+            ),
         }
         if task.last_feedback:
             payload["feedback_on_previous_attempt"] = task.last_feedback
@@ -392,12 +404,12 @@ class Planner:
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
 
         # Budget exhausted: force a final answer without any further tool calls.
-        messages.append(
-            {
-                "role": "user",
-                "content": "Tool budget exhausted. Answer now with the required JSON, no more tool calls.",
-            }
+        nudge = (
+            "Tool budget exhausted. Answer now with the required JSON, no more tool calls."
+            if json_mode
+            else "Tool budget exhausted. Provide your final report now; do not call any more tools."
         )
+        messages.append({"role": "user", "content": nudge})
         kwargs = {"model": s.planner_model, "messages": messages, "temperature": s.planner_temperature}
         if json_mode and s.planner_json_mode:
             kwargs["response_format"] = {"type": "json_object"}

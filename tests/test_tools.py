@@ -1,3 +1,5 @@
+import subprocess
+
 import pytest
 from mmco.tools import Toolbox, ToolError
 
@@ -87,6 +89,87 @@ def test_edit_too_large_raises(tmp_path):
     box = Toolbox(tmp_path, max_bytes=10)
     with pytest.raises(ToolError):
         box.edit_file("big.py", "small", "x" * 100)
+
+
+def _init_git(root):
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=root, check=True)
+
+
+def _make_secret_tree(root):
+    (root / ".env").write_text("SECRET=sk-live-xyz\n")
+    (root / ".venv" / "lib").mkdir(parents=True)
+    (root / ".venv" / "lib" / "x.py").write_text("SECRET=sk-live-xyz\n")
+    (root / "app.py").write_text("value = 'findme'\n")
+
+
+# ---- FIX 1: file tools must not leak gitignored secrets ----------------------
+
+def test_search_skips_secrets_in_git_repo(tmp_path):
+    _init_git(tmp_path)
+    (tmp_path / ".gitignore").write_text(".env\n.venv/\n")
+    _make_secret_tree(tmp_path)
+    subprocess.run(["git", "add", "app.py", ".gitignore"], cwd=tmp_path, check=True)
+    box = Toolbox(tmp_path)
+    hits = box.search("SECRET")
+    assert ".env" not in hits and ".venv" not in hits
+    assert "findme" in box.search("findme")  # a normal file is still searched
+
+
+def test_search_skips_secrets_without_git(tmp_path):
+    _make_secret_tree(tmp_path)
+    box = Toolbox(tmp_path)
+    hits = box.search("SECRET")
+    assert ".env" not in hits and ".venv" not in hits
+    assert "findme" in box.search("findme")
+
+
+def test_read_file_refuses_gitignored_secret(tmp_path):
+    _init_git(tmp_path)
+    (tmp_path / ".gitignore").write_text(".env\n")
+    _make_secret_tree(tmp_path)
+    subprocess.run(["git", "add", "app.py", ".gitignore"], cwd=tmp_path, check=True)
+    box = Toolbox(tmp_path)
+    with pytest.raises(ToolError):
+        box.read_file(".env")
+    assert "findme" in box.read_file("app.py")
+
+
+def test_read_file_refuses_excluded_without_git(tmp_path):
+    _make_secret_tree(tmp_path)
+    box = Toolbox(tmp_path)
+    with pytest.raises(ToolError):
+        box.read_file(".env")
+    with pytest.raises(ToolError):
+        box.read_file(".venv/lib/x.py")
+    assert "findme" in box.read_file("app.py")
+
+
+# ---- FIX 2: dispatch must not crash on OSError -------------------------------
+
+def test_dispatch_survives_oserror(tmp_path):
+    box = Toolbox(tmp_path)
+    result = box.dispatch("write_file", {"path": "", "content": "x"})
+    assert isinstance(result, str) and result.startswith("ERROR:")
+
+
+# ---- FIX 3: deny writes into .git/ and skip-dirs ----------------------------
+
+def test_write_denied_into_git_dir(tmp_path):
+    _init_git(tmp_path)
+    box = Toolbox(tmp_path)
+    with pytest.raises(ToolError):
+        box.write_file(".git/config", "x")
+    box.write_file("sub/ok.py", "x")
+    assert (tmp_path / "sub" / "ok.py").exists()
+
+
+def test_edit_denied_into_git_dir(tmp_path):
+    _init_git(tmp_path)
+    box = Toolbox(tmp_path)
+    with pytest.raises(ToolError):
+        box.edit_file(".git/config", "a", "b")
 
 
 def test_openai_schemas_shape():

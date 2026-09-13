@@ -62,6 +62,7 @@ class FakePlanner:
         self.choose_calls = 0
         self.raise_if_choose_called = False
         self.executed_feedback = []  # task.last_feedback seen on each execute_task call
+        self.executed_building_on_work = []  # building_on_work flag seen on each execute_task call
         self.plan_read_tools = None  # last read_tools value seen by plan()
         self.eval_read_tools = None  # last read_tools value seen by evaluate()
 
@@ -71,10 +72,11 @@ class FakePlanner:
         self.choose_calls += 1
         return self.executor_choice
 
-    def execute_task(self, session, task, toolbox):
+    def execute_task(self, session, task, toolbox, building_on_work=False):
         # self.execute_impl(root, prompt) writes files and returns a report string
         import pathlib
         self.executed_feedback.append(task.last_feedback)
+        self.executed_building_on_work.append(building_on_work)
         if self.execute_impl is None:
             return "done"
         return self.execute_impl(pathlib.Path(session.project_dir), task.description)
@@ -835,6 +837,24 @@ def test_take_over_finishes_a_claude_task(settings, db, project):
     agents = [e.agent for e in db.list_executions(session_id=session.id)]
     assert agents == ["claude", "planner"]
     assert db.list_tasks(session.id)[0].handoffs == 1
+
+
+def test_take_over_threads_feedback_to_planner(settings, db, project):
+    # On take_over the evaluator's feedback must reach the planner's execute path, and it must
+    # build on the on-disk work (no reset).
+    planner = FakePlanner(PlanResponse(tasks=[spec(0, "feature", ["test -f done.txt"])]),
+                          [verdict("take_over", "almost there", feedback="finish the parser"), ok()])
+    planner.executor_choice = ("claude", "")
+
+    def impl(root, prompt):
+        (root / "done.txt").write_text("1")
+        return "finished it"
+    planner.execute_impl = impl
+    executor = FakeExecutor([writes({"partial.py": "x"})])
+    session = build(settings, db, planner, executor).start(project, "x")
+    assert session.status == "done"
+    assert planner.executed_feedback == ["finish the parser"]
+    assert planner.executed_building_on_work == [True]  # take_over builds on disk work, no reset
 
 
 def test_take_over_builds_on_claude_work_without_resetting(settings, db, project):

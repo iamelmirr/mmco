@@ -5,10 +5,13 @@ You receive JSON with:
 - "task": what to do (title, description, acceptance_criteria,
   interface_contracts, verify_commands).
 - "project_map": a compact map of the project's files.
-- "feedback_on_previous_attempt" (optional): why your last attempt was rejected.
-  When present, a previous attempt failed and its changes have been rolled back, so
-  you are starting from a clean checkpoint. Read this feedback carefully and fix
-  what it points out.
+- "starting_point": describes the state of the working tree you begin from. It tells
+  you whether the tree already contains prior work you must build on, or whether you
+  are starting from a clean checkpoint. Read it and act accordingly: when it says work
+  is already present, read those files and continue from them rather than rewriting
+  from scratch.
+- "feedback_on_previous_attempt" (optional): why your last attempt was rejected. When
+  present, read it carefully and fix exactly what it points out.
 
 Complete the task by creating and editing files with the provided file tools.
 

@@ -396,7 +396,10 @@ class Orchestrator:
             )
             if reset_for_planner_retry:
                 workspace.reset_to(task.start_commit)
-            report = self.planner.execute_task(session, task, Toolbox(session.project_dir, allow_write=True))
+            report = self.planner.execute_task(
+                session, task, Toolbox(session.project_dir, allow_write=True),
+                building_on_work=not reset_for_planner_retry,
+            )
             result = ExecutionResult(
                 prompt=self._task_block(task), result_text=str(report), cost_usd=None, claude_session_id=None
             )
@@ -556,7 +559,7 @@ class Orchestrator:
             # With the planner-executor kill-switch off, take_over must not run the planner with a
             # write-enabled toolbox; downgrade it to a normal Claude retry with the reviewer's feedback.
             if self.settings.allow_planner_executor:
-                self._take_over(session, task, workspace)
+                self._take_over(session, task, evaluation, workspace)
             else:
                 self._retry(session, task, execution, evaluation, workspace)
         elif action == "retry":
@@ -584,7 +587,9 @@ class Orchestrator:
         self.db.save_task(task)
         logger.success("✔ task '{}' done", task.label)
 
-    def _take_over(self, session: Session, task: Task, workspace: Workspace) -> None:
+    def _take_over(
+        self, session: Session, task: Task, evaluation: EvalResult, workspace: Workspace
+    ) -> None:
         """The planner finishes the task itself, building on the coding agent's on-disk work.
 
         A per-task hand-off counter stops the two executors from ping-ponging forever: this method →
@@ -593,6 +598,9 @@ class Orchestrator:
         and is intentionally NOT reset on reformulation.
         """
         task.handoffs += 1
+        # Thread the reviewer's guidance to the planner so it knows what still needs doing. The tree is
+        # NOT reset here, so the planner builds on the coding agent's on-disk work (see _execute_as).
+        task.last_feedback = evaluation.feedback_for_executor or evaluation.reason
         self.db.save_task(task)
         if task.handoffs > self.settings.max_handoffs_per_task:
             self._fail(session, task, "executors kept handing the task back and forth", workspace)
